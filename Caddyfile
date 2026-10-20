@@ -1,0 +1,4 @@
+# HTTPS certificate is obtained automatically from Let's Encrypt.
+{$BOT_DOMAIN} {
+	reverse_proxy api:8000
+}

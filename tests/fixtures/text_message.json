@@ -1,0 +1,27 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {"display_phone_number": "15550783881", "phone_number_id": "106540352242922"},
+            "contacts": [{"profile": {"name": "Owner One"}, "wa_id": "15145550001"}],
+            "messages": [
+              {
+                "from": "15145550001",
+                "id": "wamid.TEXT0001",
+                "timestamp": "1760968800",
+                "text": {"body": "hello bot"},
+                "type": "text"
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}
