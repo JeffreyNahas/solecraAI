@@ -1,0 +1,26 @@
+# Which doc must change when which code changes. Used by scripts/check_docs.py
+# and the /update-docs command. Patterns are fnmatch-style, relative to repo root.
+
+[[map]]
+doc = "docs/architecture.md"
+code = ["app/main.py", "app/deps.py", "docker-compose.yml", "Dockerfile", "Caddyfile", "app/db/session.py"]
+
+[[map]]
+doc = "docs/data-model.md"
+code = ["app/db/models.py", "app/db/migrations/versions/*"]
+
+[[map]]
+doc = "docs/workflows.md"
+code = ["app/worker.py", "app/handlers.py", "app/approvals.py", "app/graphs/*", "app/scheduler*"]
+
+[[map]]
+doc = "docs/whatsapp-integration.md"
+code = ["app/whatsapp/*", "app/channel.py"]
+
+[[map]]
+doc = "docs/configuration.md"
+code = ["app/config.py", ".env.example"]
+
+[[map]]
+doc = "docs/security-and-compliance.md"
+code = ["app/guards/*", "app/owners.py", "app/whatsapp/signature.py"]
