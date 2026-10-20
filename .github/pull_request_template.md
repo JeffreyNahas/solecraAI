@@ -1,8 +1,11 @@
 Closes #
 
+## Why
+
 ## What changed
+-
 
-## How it was verified
+## How to verify
+-
 
-## Docs
-- [ ] `docs/` updated (or `docs: none` in a commit message, with the reason)
+## Notes
