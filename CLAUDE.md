@@ -217,7 +217,14 @@ other owner"; settings changes notify the other owner; everything written to `au
    *Done:* step 6 passes on the server.
 
 **Phase 1 — Outreach**
-8. Data model + migrations + read-only Google Sheet sync.
+8. Data model + migrations + read-only Google Sheet sync. Also agent run tracking:
+   - `runs(id, job, started_at, finished_at, status[running/succeeded/failed], counts, error)`
+     written by every scheduled job and graph run.
+   - Failures alert the owners on WhatsApp (plain-language summary).
+   - Repeated failures (same job, N in a row) auto-open or update **one** GitHub issue
+     (`type: bug`, `source: agent`) with technical details only: job, error, run id, time.
+     **No personal data** in issues. Token: fine-grained, issues-only, this repo only.
+   *Done:* a forced job failure shows in `runs`, alerts owners, and opens a single issue.
 9. Permits ingestion + filter/score.
 10. Research step + consent evidence + URL verification.
 11. Skills v1 with owners (brand voice from their real past client emails — top priority input;
@@ -299,3 +306,7 @@ other owner"; settings changes notify the other owner; everything written to `au
     (no Redis/Celery). The API therefore runs with **one uvicorn worker**.
   - Scheduler (Phase 1) runs as a separate APScheduler container sharing the codebase.
   - Google Sheet (read-only lead view) doesn't exist yet; created in step 8.
+  - Tracking split: GitHub Issues/Project = dev tasks; runtime agent activity stays in our own
+    systems (Postgres `runs`/`audit_log`, Langfuse, WhatsApp digest/alerts, Google Sheet), because it
+    holds prospect data (Law 25) and is high volume. Only repeated agent failures reach GitHub, as
+    auto-issues without personal data.
