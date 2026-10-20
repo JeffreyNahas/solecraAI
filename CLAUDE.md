@@ -92,6 +92,8 @@ Code lives at the repo root.
 
 ```
 ├── CLAUDE.md · RUNBOOK.md · README.md
+├── docs/                  # how the system works inside (see docs/README.md)
+├── .github/               # CI, issue templates
 ├── docker-compose.yml · Dockerfile · Caddyfile · .env.example · pyproject.toml · alembic.ini
 ├── app/
 │   ├── main.py            # FastAPI app factory: /health, /webhook (GET verify, POST receive)
@@ -108,7 +110,7 @@ Code lives at the repo root.
 │   ├── guards/            # (Phase 1) output guard, CASL checks
 │   ├── db/                # models, session, audit helper, alembic migrations
 │   └── skills/            # (Phase 1) brand_voice.md, casl_checklist.md, lead_scoring.md
-├── scripts/               # backup.sh, fake_webhook.py
+├── scripts/               # backup.sh, fake_webhook.py, check_docs.py
 └── tests/
     └── fixtures/          # webhook payloads (replace with real captures, see README there)
 ```
@@ -240,6 +242,37 @@ other owner"; settings changes notify the other owner; everything written to `au
   handoff; write a short runbook (`RUNBOOK.md`) as features land.
 - LangGraph re-runs an interrupted node from the top on resume: keep the `interrupt()` node free of
   side effects, and give every send an idempotency key.
+
+## 10b. Development workflow
+
+### Branches
+- Name branches after the work: `<type>/<issue#>-<short-description>`, lowercase, hyphens.
+  Types: `feat`, `fix`, `chore` (infra, deps, deploy), `docs`, `refactor`, `test`.
+  Examples: `feat/12-leads-data-model`, `chore/9-deploy-ovh`, `fix/17-duplicate-follow-up`.
+- Never use generated names (`claude/...`). If a session starts on one, create the properly named
+  branch from it before the first commit and work there.
+- One branch = one issue = one PR. PR description starts with `Closes #<issue>`.
+- `main` is protected by review: never push to it directly.
+
+### Technical docs (`docs/`)
+- `docs/` explains how the system works inside (architecture, data model, workflows, WhatsApp,
+  configuration, security/compliance). `docs/doc-map.toml` maps each code path to its doc.
+- **Every PR that changes system behaviour updates the matching doc in the same PR.**
+  Run `/update-docs` (`.claude/skills/update-docs/SKILL.md`) before opening or updating a PR.
+- CI (`scripts/check_docs.py`) fails a PR that touches mapped code without its doc. If a change
+  really needs no doc update, add a line `docs: none` to a commit message.
+
+### Task tracking (GitHub Issues + Project board "Solecra build")
+- Every task is a GitHub issue in this repo: build-plan steps, bugs, chores. Use the issue
+  templates. Board columns: Backlog → Ready → In progress → Blocked → In review → Done.
+- When an agent **starts** an issue: label `status: in progress`, comment a short plan.
+- While working: comment at meaningful milestones (not every commit).
+- When **blocked**: label `status: blocked` and comment what is blocking and exactly what is needed
+  from whom (e.g. "needs the domain name from Jeff"). Remove the label when unblocked.
+- Needs an owner/Jeff decision: label `needs decision` + a comment with the question and a
+  recommended answer.
+- Done = PR merged with `Closes #N` (issue closes automatically). Final comment: what changed,
+  how it was verified, follow-ups (as new issues).
 
 ## 11. Open decisions (do not hard-code; keep configurable)
 
