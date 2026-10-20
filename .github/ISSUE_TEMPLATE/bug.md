@@ -1,7 +1,7 @@
 ---
 name: Bug
 about: Something doesn't work as it should
-labels: ["type: bug"]
+labels: ["bug"]
 ---
 
 ## What happened
