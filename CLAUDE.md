@@ -11,7 +11,7 @@ owners use through **WhatsApp**: first it finds and contacts new clients (outrea
 bookkeeping in **Odoo** (ERP), then customer care (CRM) and marketing. Jeff is the developer
 (forward-deployed engineer style). The owners are non-technical.
 
-**Current status:** Gate 1 built (steps 1–6), awaiting review. Step 7 (VPS deploy) is guided — see
+**Current status:** Gate 1 passed live on the WhatsApp test number (2026-10-20, local + tunnel). Step 7 (VPS deploy) is guided — see
 `RUNBOOK.md`. Next: Phase 1 outreach (Section 9). Decisions made so far: Section 12.
 
 ## 2. Non-negotiable rules
@@ -199,7 +199,7 @@ other owner"; settings changes notify the other owner; everything written to `au
 
 ## 9. Build plan with "done when" checks
 
-**Phase 0 — Gate 1 (built; awaiting review)**
+**Phase 0 — Gate 1 (steps 1–6 passed 2026-10-20; step 7 pending)**
 1. Skeleton: compose (api + postgres), `/health`. *Done:* `200 OK`.
 2. Webhook verify. *Done:* Meta accepts the URL.
 3. Receive safely: signature check, immediate 200, dedupe by message id, allowlist.
