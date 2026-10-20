@@ -222,7 +222,7 @@ other owner"; settings changes notify the other owner; everything written to `au
      written by every scheduled job and graph run.
    - Failures alert the owners on WhatsApp (plain-language summary).
    - Repeated failures (same job, N in a row) auto-open or update **one** GitHub issue
-     (`type: bug`, `source: agent`) with technical details only: job, error, run id, time.
+     (label `bug`, title prefix `[agent]`) with technical details only: job, error, run id, time.
      **No personal data** in issues. Token: fine-grained, issues-only, this repo only.
    *Done:* a forced job failure shows in `runs`, alerts owners, and opens a single issue.
 9. Permits ingestion + filter/score.
@@ -255,7 +255,7 @@ other owner"; settings changes notify the other owner; everything written to `au
 ### Branches
 - Name branches after the work: `<type>/<issue#>-<short-description>`, lowercase, hyphens.
   Types: `feat`, `fix`, `chore` (infra, deps, deploy), `docs`, `refactor`, `test`.
-  Examples: `feat/12-leads-data-model`, `chore/9-deploy-ovh`, `fix/17-duplicate-follow-up`.
+  Examples: `feat/6-outreach-data-model`, `chore/3-secure-vps`, `fix/17-duplicate-follow-up`.
 - Never use generated names (`claude/...`). If a session starts on one, create the properly named
   branch from it before the first commit and work there.
 - One branch = one issue = one PR. PR description starts with `Closes #<issue>`.
@@ -272,14 +272,19 @@ other owner"; settings changes notify the other owner; everything written to `au
 ### Task tracking (GitHub Issues + Project board "Solecra build")
 - Every task is a GitHub issue in this repo: build-plan steps, bugs, chores. Use the issue
   templates. Board columns: Backlog → Ready → In progress → Blocked → In review → Done.
-- When an agent **starts** an issue: label `status: in progress`, comment a short plan.
+- Labels (use only these): `enhancement` (feature/build step/infra), `bug`, `documentation`,
+  `needs decision` (waiting on Jeff/owners), `question` (needs information), `wontfix`.
+- Agents can't move board cards (no Projects access); the board's built-in workflows do:
+  auto-add new issues → Backlog, PR merged / issue closed → Done. Jeff moves Ready/In progress/Blocked.
+- When an agent **starts** an issue: create the branch, comment a short plan on the issue, and open
+  a **draft PR** early whose description starts with `Closes #N` (shows the work is in progress).
 - While working: comment at meaningful milestones (not every commit).
-- When **blocked**: label `status: blocked` and comment what is blocking and exactly what is needed
-  from whom (e.g. "needs the domain name from Jeff"). Remove the label when unblocked.
-- Needs an owner/Jeff decision: label `needs decision` + a comment with the question and a
-  recommended answer.
+- When **blocked**: comment what is blocking and exactly what is needed from whom
+  (e.g. "needs the domain name from Jeff"), and add `needs decision` (a choice) or `question`
+  (missing information). Remove the label when unblocked.
 - Done = PR merged with `Closes #N` (issue closes automatically). Final comment: what changed,
   how it was verified, follow-ups (as new issues).
+- Runtime agent failures (step 8) open issues labelled `bug` with the title prefix `[agent]`.
 
 ## 11. Open decisions (do not hard-code; keep configurable)
 
