@@ -276,8 +276,12 @@ other owner"; settings changes notify the other owner; everything written to `au
   `needs decision` (waiting on Jeff/owners), `question` (needs information), `wontfix`.
 - Agents can't move board cards (no Projects access); the board's built-in workflows do:
   auto-add new issues → Backlog, PR merged / issue closed → Done. Jeff moves Ready/In progress/Blocked.
+- Agents run every issue with **`/work-on-issue`** (`.claude/skills/work-on-issue/`) and write every PR
+  with **`/pull-request`** (`.claude/skills/pull-request/`). Both are mandatory.
 - When an agent **starts** an issue: create the branch, comment a short plan on the issue, and open
   a **draft PR** early whose description starts with `Closes #N` (shows the work is in progress).
+- `.github/workflows/issue-sync.yml` comments PR state on linked issues automatically
+  (in progress, ready for review, merged).
 - While working: comment at meaningful milestones (not every commit).
 - When **blocked**: comment what is blocking and exactly what is needed from whom
   (e.g. "needs the domain name from Jeff"), and add `needs decision` (a choice) or `question`
