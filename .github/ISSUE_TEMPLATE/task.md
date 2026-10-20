@@ -1,7 +1,7 @@
 ---
 name: Task
 about: A build step, feature or chore
-labels: ["type: feature"]
+labels: ["enhancement"]
 ---
 
 ## Goal
