@@ -100,20 +100,67 @@ uv run ruff check . && uv run ruff format --check .
 
 ## 6. Deploy to the VPS (step 7)
 
-Target: a small VPS in Québec (e.g. OVHcloud VPS, Beauharnois/BHS region, Ubuntu 24.04,
-2 vCPU / 2–4 GB RAM is plenty), on Solecra's account.
+Target: OVHcloud VPS, Beauharnois (BHS), Ubuntu 26.04, on Solecra's account.
 
-### 6.1 Server basics (run as root the first time, then as `deploy`)
+### 6.1 Server basics (as the `ubuntu` admin user, over SSH)
 
+Server: OVHcloud VPS `vps-79cc5313.vps.ovh.ca` (`15.235.92.201`), Beauharnois, Ubuntu 26.04.
+OVH creates the `ubuntu` user with `sudo`; we use it as the admin account (no separate user).
+First add your SSH key from your Mac: `ssh-copy-id ubuntu@<SERVER_IP>` (uses the OVH password once).
+
+**1. Update, then reboot if needed**
 ```bash
-adduser deploy && usermod -aG sudo deploy
-mkdir -p /home/deploy/.ssh && cp ~/.ssh/authorized_keys /home/deploy/.ssh/ && chown -R deploy: /home/deploy/.ssh
-# SSH keys only:
-sed -i 's/^#\?PasswordAuthentication .*/PasswordAuthentication no/; s/^#\?PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config
-systemctl restart ssh            # test login as deploy in a NEW terminal before closing this one
-ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp && ufw enable
-apt update && apt install -y unattended-upgrades && dpkg-reconfigure -plow unattended-upgrades
-curl -fsSL https://get.docker.com | sh && usermod -aG docker deploy
+sudo apt update && sudo apt full-upgrade -y
+[ -f /var/run/reboot-required ] && sudo reboot
+```
+
+**2. SSH: keys only, no root.** Cloud images ship `/etc/ssh/sshd_config.d/50-cloud-init.conf`
+with `PasswordAuthentication yes`, and sshd uses the *first* value it reads, so editing
+`sshd_config` is not enough. A `00-` drop-in is read first and wins:
+```bash
+sudo tee /etc/ssh/sshd_config.d/00-hardening.conf > /dev/null <<'CONF'
+# Solecra: key-only SSH (see RUNBOOK §6.1)
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+PubkeyAuthentication yes
+CONF
+sudo sshd -t && sudo systemctl restart ssh
+sudo sshd -T | grep -Ei '^(passwordauthentication|kbdinteractiveauthentication|permitrootlogin)'   # all "no"
+```
+Keep the current session open; from a **new** terminal check that `ssh ubuntu@<SERVER_IP>` works and
+`ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password ubuntu@<SERVER_IP>` is refused.
+
+**3. Firewall** (allow SSH *before* enabling):
+```bash
+sudo ufw default deny incoming && sudo ufw default allow outgoing
+sudo ufw allow OpenSSH && sudo ufw allow 80/tcp && sudo ufw allow 443/tcp
+sudo ufw enable && sudo ufw status verbose
+```
+
+**4. Automatic security updates** (installed by default; reboot at 04:00 UTC only when required):
+```bash
+cat /etc/apt/apt.conf.d/20auto-upgrades     # both lines "1"; else: sudo dpkg-reconfigure -plow unattended-upgrades
+sudo tee /etc/apt/apt.conf.d/52solecra-auto-reboot > /dev/null <<'CONF'
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-Time "04:00";
+CONF
+```
+
+**5. Docker** (official repository, with log size limits):
+```bash
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo tee /etc/docker/daemon.json > /dev/null <<'CONF'
+{ "log-driver": "json-file", "log-opts": { "max-size": "10m", "max-file": "3" } }
+CONF
+sudo systemctl restart docker
+sudo usermod -aG docker ubuntu     # log out and back in
+docker run --rm hello-world && docker compose version && systemctl is-enabled docker
 ```
 
 Docker publishes ports past ufw, which is why compose binds Postgres and the API to `127.0.0.1` only.
@@ -127,7 +174,7 @@ At your domain registrar, add an **A record**: `bot.<domain>` → the VPS IP. Wa
 ### 6.3 App
 
 ```bash
-sudo mkdir -p /opt/solecra && sudo chown deploy: /opt/solecra
+sudo mkdir -p /opt/solecra && sudo chown ubuntu: /opt/solecra
 git clone https://github.com/jeffreynahas/solecraai.git /opt/solecra   # private repo: use a deploy key or token
 cd /opt/solecra
 cp .env.example .env && nano .env     # strong POSTGRES_PASSWORD, BOT_DOMAIN=bot.<domain>, WHATSAPP_DRY_RUN=false
