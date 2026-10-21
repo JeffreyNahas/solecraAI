@@ -32,6 +32,10 @@ updates:
       interval: weekly
       day: monday
       timezone: America/Montreal
+    ignore:
+      # Python version changes (3.12 -> 3.13) must match .python-version and pyproject; do them deliberately.
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     commit-message:
       prefix: "deps"
 
