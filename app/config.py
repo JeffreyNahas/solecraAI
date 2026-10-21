@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     # Later phases
     openrouter_api_key: str = ""
 
+    # Run tracking: after this many failures in a row, open/update a GitHub issue.
+    run_failure_issue_threshold: int = Field(default=3, ge=1)
+    # Fine-grained token with Issues read/write on this repo only. Empty = reporter off (log only).
+    github_issues_token: str = ""
+    github_repo: str = "JeffreyNahas/solecraAI"
+    timezone: str = "America/Montreal"
+
     log_level: str = "INFO"
     worker_poll_seconds: float = Field(default=2.0, gt=0)
     worker_max_attempts: int = 3

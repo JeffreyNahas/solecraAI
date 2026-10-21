@@ -17,6 +17,10 @@ All settings come from environment variables (`.env`, loaded by `app/config.py`)
 | `OWNER_PHONES` | — | Allowlist `phone:Name,phone:Name`, country code, digits (formatting stripped) |
 | `WEBHOOK_CAPTURE_DIR` | unset | Dev: save raw webhook bodies to build fixtures |
 | `OPENROUTER_API_KEY` | — | Phase 1 LLM calls |
+| `RUN_FAILURE_ISSUE_THRESHOLD` | `3` | Failures in a row before a GitHub issue is opened |
+| `GITHUB_ISSUES_TOKEN` | — | Fine-grained token, **Issues: read and write** on this repo only. Empty = reporter off |
+| `GITHUB_REPO` | `JeffreyNahas/solecraAI` | Where `[agent]` issues are opened |
+| `TIMEZONE` | `America/Montreal` | Times shown to owners and in issues |
 | `BOT_DOMAIN` | — | Server: Caddy's HTTPS hostname |
 | `LOG_LEVEL` | `INFO` | Logging |
 | `WORKER_POLL_SECONDS` | `2.0` | Worker safety-net poll |

@@ -103,6 +103,10 @@ Code lives at the repo root.
 │   ├── handlers.py        # what the bot does with each owner message
 │   ├── approvals.py       # approval records, first-action-wins transitions
 │   ├── owners.py          # allowlist sync from OWNER_PHONES
+│   ├── leads.py           # lead dedupe + status transitions
+│   ├── suppression.py     # do-not-email list (CASL)
+│   ├── runs.py            # run tracking, owner alerts, [agent] GitHub issues
+│   ├── jobs/              # job registry; run with scripts/run_job.py
 │   ├── llm.py             # (Phase 1) single OpenRouter client + model routing table
 │   ├── whatsapp/          # signature check, parse, client (send_text, send_buttons), button ids
 │   ├── graphs/            # LangGraph workflows (approval_demo first, then outreach)
@@ -110,7 +114,7 @@ Code lives at the repo root.
 │   ├── guards/            # (Phase 1) output guard, CASL checks
 │   ├── db/                # models, session, audit helper, alembic migrations
 │   └── skills/            # (Phase 1) brand_voice.md, casl_checklist.md, lead_scoring.md
-├── scripts/               # backup.sh, fake_webhook.py, check_docs.py
+├── scripts/               # backup.sh, fake_webhook.py, check_docs.py, run_job.py
 └── tests/
     └── fixtures/          # webhook payloads (replace with real captures, see README there)
 ```
