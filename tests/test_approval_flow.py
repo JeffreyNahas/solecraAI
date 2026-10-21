@@ -65,12 +65,32 @@ async def test_second_owner_gets_already_handled(running_app, channel):
     async with running_app() as (app, client):
         approval = await start_demo(app, client)
         await post(client, button_payload(OWNER_1, f"approve:{approval.id}:1", "wamid.TAP_A"))
+        # Owners are processed in parallel; finish Owner 1's tap first so the order is fixed.
+        await wait_idle(app)
         await post(client, button_payload(OWNER_2, f"reject:{approval.id}:1", "wamid.TAP_B"))
         await wait_idle(app)
         final = await get_approval(app, approval.id)
     assert final.status == "approved" and final.decided_by == OWNER_1
     assert "Already handled by Alice (approved)." in bodies(channel, OWNER_2)
     assert not any(b.startswith("❌") for b in bodies(channel, OWNER_2))
+
+
+async def test_simultaneous_taps_exactly_one_wins(running_app, channel):
+    """Both owners tap at the same moment: either may win, but only one decision is applied."""
+    async with running_app() as (app, client):
+        approval = await start_demo(app, client)
+        await post(client, button_payload(OWNER_1, f"approve:{approval.id}:1", "wamid.SIM_A"))
+        await post(client, button_payload(OWNER_2, f"reject:{approval.id}:1", "wamid.SIM_B"))
+        await wait_idle(app)
+        final = await get_approval(app, approval.id)
+
+    winner, loser = (OWNER_1, OWNER_2) if final.decided_by == OWNER_1 else (OWNER_2, OWNER_1)
+    assert (final.status, final.decided_by) in {("approved", OWNER_1), ("rejected", OWNER_2)}
+    assert final.version == 2 and final.resumed_at is not None
+    results = [b for b in bodies(channel, OWNER_1) if b.startswith(("✅", "❌"))]
+    assert len(results) == 1  # the graph reported exactly one outcome
+    assert any(b.startswith("Already handled by") for b in bodies(channel, loser))
+    assert not any(b.startswith("Already handled") for b in bodies(channel, winner))
 
 
 async def test_same_tap_redelivered_is_harmless(running_app, channel):
