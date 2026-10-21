@@ -88,4 +88,10 @@ Everything from the FastAPI route onward is identical.
 | `app/approvals.py` | Approval records and transitions |
 | `app/graphs/` | LangGraph workflows |
 | `app/owners.py` | Allowlist |
+| `app/leads.py` | Lead dedupe and status transitions |
+| `app/suppression.py` | Do-not-email list |
+| `app/runs.py` | Run tracking, failure alerts |
+| `app/jobs/` | Job registry (`run_job`) |
+| `app/tools/` | External APIs (GitHub issues; later permits, Gmail, Calendar…) |
+| `app/redact.py` | Strip emails/phones from outgoing technical text |
 | `app/db/` | Models, session, audit helper, migrations |

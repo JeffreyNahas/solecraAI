@@ -64,5 +64,29 @@ START → make_draft → request_approval → wait_for_owner → report → END
 `thread_id = run_id = "approval_demo:<uuid>"`. On resume LangGraph re-runs the interrupted node
 from the top, so `wait_for_owner` has no side effects and every send has an idempotency key.
 
+## Jobs and run tracking (`app/jobs/`, `app/runs.py`)
+
+A **job** is `async def job(deps, run)`; it reports counts with `run.add("inserted", n)` and fails by
+raising. Jobs are registered by name in `app/jobs.JOBS`; `run_job(deps, name)` runs one with tracking
+and never raises. Today: `selftest_ok`, `selftest_fail` (forced failure for testing alerts).
+Run one by hand: `uv run python -m scripts.run_job <name>` (server: `docker compose exec api python -m scripts.run_job <name>`).
+
+`track_run(deps, job)` writes a `runs` row (`running` → `succeeded`/`failed`) and then:
+
+| Situation | Owners (WhatsApp) | GitHub |
+|---|---|---|
+| First failure after a success | One plain-language alert (`⚠️ <job> didn't work…`), key `run:<id>:alert:<phone>` | — |
+| More failures in the same streak | nothing (no spam) | from `RUN_FAILURE_ISSUE_THRESHOLD` failures in a row: open **one** issue `[agent] <job> failing` (label `bug`), then comment on it each time |
+| Success after failures | `✅ <job> is working again.` | comment "succeeded again" (issue stays open until a human closes it) |
+
+- Issue number per job is stored in `settings` (`agent_issue:<job>`). If that issue was closed, the
+  next threshold breach opens a new one.
+- Issue text has the job, run id, local time, streak and the error with emails and phone numbers
+  replaced (`app/redact.py`). No lead data.
+- Reporter (`app/tools/github_issues.py`) is off when `GITHUB_ISSUES_TOKEN` is empty: it only logs.
+- Alerting errors are logged and never replace the job's own error.
+- Owner labels for jobs: `JOB_LABELS` in `app/runs.py`.
+
 ## Planned (Phase 1)
-Outreach graphs (ingest, research, draft, send, replies) and the scheduler — CLAUDE.md §7.
+Scheduler container running the jobs on the CLAUDE.md §7 timetable; outreach graphs (ingest, research,
+draft, send, replies) — CLAUDE.md §7.

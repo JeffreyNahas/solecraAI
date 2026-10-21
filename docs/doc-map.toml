@@ -7,11 +7,11 @@ code = ["app/main.py", "app/deps.py", "docker-compose.yml", "Dockerfile", "Caddy
 
 [[map]]
 doc = "docs/data-model.md"
-code = ["app/db/models.py", "app/db/migrations/versions/*"]
+code = ["app/db/models.py", "app/db/migrations/*", "app/db/migrations/versions/*", "app/leads.py", "app/suppression.py"]
 
 [[map]]
 doc = "docs/workflows.md"
-code = ["app/worker.py", "app/handlers.py", "app/approvals.py", "app/graphs/*", "app/scheduler*"]
+code = ["app/worker.py", "app/handlers.py", "app/approvals.py", "app/graphs/*", "app/scheduler*", "app/runs.py", "app/jobs/*", "app/tools/github_issues.py"]
 
 [[map]]
 doc = "docs/whatsapp-integration.md"
@@ -23,4 +23,4 @@ code = ["app/config.py", ".env.example"]
 
 [[map]]
 doc = "docs/security-and-compliance.md"
-code = ["app/guards/*", "app/owners.py", "app/whatsapp/signature.py"]
+code = ["app/guards/*", "app/owners.py", "app/whatsapp/signature.py", "app/redact.py"]

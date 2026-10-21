@@ -234,3 +234,26 @@ Run the Gate 1 checklist (section 4) against the server, using
 - Messages not delivered, log shows `131047` → 24 h window closed; the owner must message the bot first.
 - `HTTP 401` from Graph API → access token expired (temporary tokens last ~24 h); see section 1 step 7.
 - Meta says webhook verification failed → `WHATSAPP_VERIFY_TOKEN` mismatch or URL not reachable.
+
+---
+
+## 8. Job failure alerts and `[agent]` GitHub issues
+
+Every job run is recorded in the `runs` table. On failure, owners get one WhatsApp alert per failure
+streak; after `RUN_FAILURE_ISSUE_THRESHOLD` failures in a row, one GitHub issue `[agent] <job> failing`
+is opened (and commented on after that). Details: `docs/workflows.md`.
+
+**Turn on GitHub issues** (once, on the server):
+1. GitHub → your avatar → **Settings → Developer settings → Personal access tokens → Fine-grained tokens
+   → Generate new token**. Name `solecra-agent-issues`, expiry 1 year, **Only select repositories:
+   `solecraAI`**, Repository permissions → **Issues: Read and write** (nothing else).
+2. Put it in the server's `.env` as `GITHUB_ISSUES_TOKEN=...`, then `docker compose --profile prod up -d api`.
+3. Set a calendar reminder to renew it before it expires.
+
+**Test it:**
+```bash
+docker compose exec api python -m scripts.run_job selftest_fail   # repeat 3 times
+docker compose exec postgres psql -U solecra -c "select id, job, status, error from runs order by id desc limit 5"
+```
+Owners get one alert; after the 3rd run an `[agent] selftest_fail failing` issue appears. Close it after.
+Then `selftest_ok` is the matching success job.
