@@ -2,6 +2,9 @@
 
 How to set up, run, test, deploy and operate the bot. Keep this updated as features land.
 
+**Shortcuts:** most commands below have a `make` equivalent. Run `make` to list them
+(`make dev`, `make logs`, `make test`, `make check`, `make deploy`, `make server-logs`, `make backup`, …).
+
 ---
 
 ## 1. One-time: Meta (WhatsApp) setup for development
@@ -221,13 +224,15 @@ Run the Gate 1 checklist (section 4) against the server, using
 
 ## 7. Day-to-day operations
 
-| Task | Command (in `/opt/solecra`) |
-|---|---|
-| Logs | `docker compose logs -f --tail 200 api` |
-| Restart | `docker compose --profile prod restart api` |
-| Deploy update | `git pull && docker compose --profile prod up -d --build` |
-| Stuck messages | `select message_id,status,attempts,last_error from inbound_messages where status<>'done'` |
-| Change owners | edit `OWNER_PHONES` in `.env`, then `docker compose --profile prod up -d api` |
+| Task | From your Mac | On the server (in `/opt/solecra`) |
+|---|---|---|
+| Logs | `make server-logs` | `docker compose logs -f --tail 200 api` |
+| Status | `make server-ps` | `docker compose --profile prod ps` |
+| Restart | — | `docker compose --profile prod restart api` |
+| Deploy update | `make deploy` | `git pull && docker compose --profile prod up -d --build` |
+| Backup now | `make backup` | `./scripts/backup.sh` |
+| Stuck messages | — | `select message_id,status,attempts,last_error from inbound_messages where status<>'done'` |
+| Change owners | — | edit `OWNER_PHONES` in `.env`, then `docker compose --profile prod up -d api` |
 
 **Troubleshooting**
 - `webhook rejected: bad signature` → `WHATSAPP_APP_SECRET` doesn't match the Meta app.
