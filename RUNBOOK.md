@@ -96,6 +96,9 @@ TEST_DATABASE_URL=postgresql://solecra:<POSTGRES_PASSWORD>@localhost:5432/solecr
 uv run ruff check . && uv run ruff format --check .
 ```
 
+In Claude Code cloud sessions this is automatic: `.claude/hooks/session-start.sh` installs the
+dependencies, starts Postgres 16 on port 5433 and sets `TEST_DATABASE_URL`.
+
 ---
 
 ## 6. Deploy to the VPS (step 7)
