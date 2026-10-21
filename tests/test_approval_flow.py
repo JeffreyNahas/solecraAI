@@ -103,6 +103,8 @@ async def test_edit_uses_replacement_text(running_app, channel):
 
         # The other owner can no longer act on the old buttons.
         await post(client, button_payload(OWNER_2, f"approve:{approval.id}:1", "wamid.LATE"))
+        # Owners are processed in parallel; let Owner 2's tap finish first so the order is fixed.
+        await wait_idle(app)
         await post(client, text_payload(OWNER_1, "Bonjour, nouveau texte.", "wamid.NEWTEXT"))
         await wait_idle(app)
         final = await get_approval(app, approval.id)
