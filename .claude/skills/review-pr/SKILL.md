@@ -10,11 +10,8 @@ The author must not review their own work. This skill only **prepares** the revi
 which never sees the author's reasoning.
 
 ## 1. Is a review needed?
-Get the PR (`pull_request_read` get + get_files). It is **large or risky** (CLAUDE.md §10b) if:
-- more than ~300 changed lines outside `tests/` and `docs/`, **or**
-- it touches `app/db/migrations/`, outbound senders or guards (`app/whatsapp/client.py`,
-  Gmail sending, `app/guards/`), `app/approvals.py`, `app/graphs/`, or `.github/workflows/`.
-
+Get the PR (`pull_request_read` get + get_files) and apply the **large or risky** definition in
+CLAUDE.md §10b ("Large PRs and review") — don't restate it here, it's the single source.
 Not large/risky and no `--force` → tell the user in one line and stop.
 
 ## 2. Gather the inputs (facts only, no opinions)
@@ -24,19 +21,25 @@ Not large/risky and no `--force` → tell the user in one line and stop.
   `log-triage` subagent (Haiku) and pass it on.
 - A throwaway worktree with the PR head:
   ```bash
-  git fetch origin pull/<n>/head:review/pr-<n> && git fetch origin <base>
-  git worktree add --force <scratchpad>/review-pr-<n> review/pr-<n>
+  # clean leftovers from an aborted run, then force-refresh (handles force-pushed PRs)
+  git worktree remove --force <scratchpad>/review-pr-<n> 2>/dev/null; git branch -D review/pr-<n> 2>/dev/null
+  git fetch origin +pull/<n>/head:review/pr-<n> && git fetch origin <base>
+  git worktree add <scratchpad>/review-pr-<n> review/pr-<n>
   ```
+- Test database: in cloud sessions make sure Postgres is up (`.claude/hooks/session-start.sh`).
 
 ## 3. Launch the reviewer
-Agent tool, `subagent_type: "pr-reviewer"` (if that type isn't available in this session, use
-`general-purpose` with `model: "opus"` and paste the body of `.claude/agents/pr-reviewer.md` as the
-instructions). Run it in the foreground. Prompt contains **only**: PR number, base branch, worktree
+Agent tool, `subagent_type: "pr-reviewer"`, foreground. **Never substitute another agent type**:
+only `pr-reviewer` has the read-only tool list and the Bash guard hook. If the type isn't available
+(agent definitions load at session start), stop and tell the user to start a new session or reload
+agents (`/agents`), then re-run `/review-pr`. Prompt contains **only**: PR number, base branch, worktree
 path, issue number, CI status + log summary, Review focus line. Do **not** add your own view of
 the PR, the conversation, or why things were done.
 
 ## 4. Publish
-1. Post the reviewer's report **unchanged** as one PR comment (`add_issue_comment` on the PR),
+1. Scan the report for personal data or secret values (the reviewer is told not to quote them);
+   if any slipped through, replace just those values with `[redacted]` and say so in chat.
+   Then post the report otherwise **unchanged** as one PR comment (`add_issue_comment` on the PR),
    followed by the attribution footer the session requires. Don't soften or filter findings; if
    you think one is wrong, say so in chat, not in the comment.
 2. In chat: the verdict, the blocking items in one line each, and the comment link.
