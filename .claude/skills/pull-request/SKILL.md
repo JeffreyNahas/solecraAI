@@ -7,7 +7,7 @@ description: Write or update a pull request in this repo's fixed format (short, 
 
 ## Before writing
 1. Find the issue: from the branch name (`<type>/<issue#>-...`). No issue → create one first
-   (rules in CLAUDE.md §10b). Read its "Done when" list.
+   with `/new-issue`. Read its "Done when" list.
 2. Read the real change: `git log origin/main..HEAD --oneline` and `git diff origin/main...HEAD --stat`,
    then the diff itself. Describe what the code does now, not what you planned.
 3. Run `/update-docs` if behaviour changed, and the checks (`uv run ruff check .`,
@@ -33,10 +33,15 @@ One or two sentences: the problem or goal, in plain words.
 - What was run and its result (tests, lint, manual steps).
 - Steps a reviewer can repeat, if any.
 
+**Review focus:** one line — where the risk is (e.g. "status transitions in `app/leads.py`").
+
 ## Notes
-Only if needed: follow-ups (as issue links), risks, decisions needed, things deliberately left out.
+Only if needed: follow-ups (as issue links), risks, things deliberately left out.
 Delete this section when empty.
 ```
+
+Decisions are not a PR section: they are asked in chat **before** building (CLAUDE.md §10b).
+Large/risky PRs also get an independent review comment from `/review-pr`.
 
 ## Rules
 - Lean: the whole body should fit on one screen. No restating the diff line by line.

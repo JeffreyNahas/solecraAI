@@ -93,7 +93,8 @@ Code lives at the repo root.
 ```
 ├── CLAUDE.md · RUNBOOK.md · README.md
 ├── docs/                  # how the system works inside (see docs/README.md)
-├── .github/               # CI, issue templates
+├── .github/               # CI, issue templates, Dependabot
+├── .claude/               # skills (new-issue, work-on-issue, pull-request, update-docs), agents, hooks
 ├── docker-compose.yml · Dockerfile · Caddyfile · .env.example · pyproject.toml · alembic.ini
 ├── app/
 │   ├── main.py            # FastAPI app factory: /health, /webhook (GET verify, POST receive)
@@ -263,7 +264,37 @@ other owner"; settings changes notify the other owner; everything written to `au
 - Never use generated names (`claude/...`). If a session starts on one, create the properly named
   branch from it before the first commit and work there.
 - One branch = one issue = one PR. PR description starts with `Closes #<issue>`.
-- `main` is protected by review: never push to it directly.
+- `main` is protected (PR + green `test` and `docs` checks): never push to it directly.
+
+### Approvals and decisions
+- **Only two actions need Jeff:** merging a PR and deploying to the server. Agents merge or deploy
+  only when Jeff explicitly asks for that specific PR/deploy in the conversation. Everything else
+  (branches, pushes to non-`main` branches, PRs, issue updates, review comments) needs no approval.
+- **Ask before building, not after.** When a requirement is unclear or a product decision is needed
+  (business rules, thresholds, wording seen by owners or clients, scope splits), stop and ask Jeff
+  in chat with a recommended answer, and wait. Don't bury decisions in PR descriptions.
+  Unattended runs: comment the question + recommendation on the issue, add `needs decision`, and
+  continue only on parts that don't depend on it.
+- The product's own runtime rules (CLAUDE.md §2: owner approval before anything leaves the company)
+  are separate and unchanged.
+
+### Models (Claude Code)
+| Work | Model | How |
+|---|---|---|
+| Fast, high-volume, mechanical: CI/log parsing, extracting errors, reformatting output | **Haiku** | `log-triage` subagent, or Agent tool with `model: haiku` |
+| Default, ~80% of work: coding, bug fixes, features, docs, issues, PRs | **Sonnet** | session default (`.claude/settings.json` `"model": "sonnet"`) |
+| Complex architecture, deep root-cause debugging, high-stakes planning | **Opus** | `architect` subagent |
+| Independent PR review (large/risky PRs) | **Opus** | `pr-reviewer` subagent via `/review-pr` (#38) |
+
+Subagents live in `.claude/agents/`. Use Opus when a mistake would be expensive (schema design,
+compliance-sensitive flows, a bug whose cause isn't found after one honest attempt), not by default.
+This table is for building the system; the product's own LLM routing is in `app/llm.py` (§4).
+
+### Large PRs and review
+A PR is **large or risky** if it changes more than ~300 non-test lines, **or** touches any of:
+migrations, outbound senders and guards (WhatsApp/Gmail sending, `app/guards/`), approvals and
+graphs (`app/approvals.py`, `app/graphs/`), `.github/workflows/`. Large/risky PRs get an
+independent review (`/review-pr`) before Jeff merges. No size limit on PRs.
 
 ### Technical docs (`docs/`)
 - `docs/` explains how the system works inside (architecture, data model, workflows, WhatsApp,
@@ -274,14 +305,14 @@ other owner"; settings changes notify the other owner; everything written to `au
   really needs no doc update, add a line `docs: none` to a commit message.
 
 ### Task tracking (GitHub Issues + Project board "Solecra build")
-- Every task is a GitHub issue in this repo: build-plan steps, bugs, chores. Use the issue
-  templates. Board columns: Backlog → Ready → In progress → Blocked → In review → Done.
+- Every task is a GitHub issue in this repo: build-plan steps, bugs, chores, written with `/new-issue`.
+  Board columns: Backlog → Ready → In progress → Blocked → In review → Done.
 - Labels (use only these): `enhancement` (feature/build step/infra), `bug`, `documentation`,
   `needs decision` (waiting on Jeff/owners), `question` (needs information), `wontfix`.
 - Agents can't move board cards (no Projects access); the board's built-in workflows do:
   auto-add new issues → Backlog, PR merged / issue closed → Done. Jeff moves Ready/In progress/Blocked.
-- Agents run every issue with **`/work-on-issue`** (`.claude/skills/work-on-issue/`) and write every PR
-  with **`/pull-request`** (`.claude/skills/pull-request/`). Both are mandatory.
+- Agents create issues with **`/new-issue`**, run every issue with **`/work-on-issue`** and write every PR
+  with **`/pull-request`** (all in `.claude/skills/`). All three are mandatory.
 - When an agent **starts** an issue: create the branch, comment a short plan on the issue, and open
   a **draft PR** early whose description starts with `Closes #N` (shows the work is in progress).
 - `.github/workflows/issue-sync.yml` comments PR state on linked issues automatically
@@ -293,6 +324,14 @@ other owner"; settings changes notify the other owner; everything written to `au
 - Done = PR merged with `Closes #N` (issue closes automatically). Final comment: what changed,
   how it was verified, follow-ups (as new issues).
 - Runtime agent failures (step 8) open issues labelled `bug` with the title prefix `[agent]`.
+
+### Lessons (keep short; add one line when something surprised us)
+- **Fix the pattern, not the instance.** After fixing a bug, search for the same pattern elsewhere
+  before closing (2026-10: a two-owner race was fixed in one test and resurfaced in another).
+- **Verify effective config, not the file you edited.** Cloud images override settings in drop-ins
+  (OVH's `50-cloud-init.conf` re-enabled SSH passwords); check with `sshd -T`-style commands.
+- **Owners are processed in parallel.** Tests (and code) must not assume an order between messages
+  from different owners.
 
 ## 11. Open decisions (do not hard-code; keep configurable)
 
