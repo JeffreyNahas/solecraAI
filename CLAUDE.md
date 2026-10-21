@@ -94,7 +94,6 @@ Code lives at the repo root.
 ├── CLAUDE.md · RUNBOOK.md · README.md
 ├── docs/                  # how the system works inside (see docs/README.md)
 ├── .github/               # CI, issue templates
-├── .claude/               # skills (incl. /review-pr), agents (pr-reviewer), hooks
 ├── docker-compose.yml · Dockerfile · Caddyfile · .env.example · pyproject.toml · alembic.ini
 ├── app/
 │   ├── main.py            # FastAPI app factory: /health, /webhook (GET verify, POST receive)
