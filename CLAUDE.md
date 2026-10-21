@@ -94,7 +94,8 @@ Code lives at the repo root.
 ├── CLAUDE.md · RUNBOOK.md · README.md
 ├── docs/                  # how the system works inside (see docs/README.md)
 ├── .github/               # CI, issue templates, Dependabot
-├── .claude/               # skills (new-issue, work-on-issue, pull-request, update-docs), agents, hooks
+├── .claude/               # skills (new-issue, work-on-issue, pull-request, update-docs, review-pr),
+│                          # agents (log-triage, architect, pr-reviewer), hooks
 ├── docker-compose.yml · Dockerfile · Caddyfile · .env.example · pyproject.toml · alembic.ini
 ├── app/
 │   ├── main.py            # FastAPI app factory: /health, /webhook (GET verify, POST receive)
@@ -330,6 +331,10 @@ independent review (`/review-pr`) before Jeff merges. No size limit on PRs.
   before closing (2026-10: a two-owner race was fixed in one test and resurfaced in another).
 - **Verify effective config, not the file you edited.** Cloud images override settings in drop-ins
   (OVH's `50-cloud-init.conf` re-enabled SSH passwords); check with `sshd -T`-style commands.
+- **Agent definitions load at session start.** A subagent created or edited mid-session runs its old
+  version (or isn't available) until a new session; verify agent changes in a fresh session.
+- **Prompts are not permissions.** Read-only roles must be enforced by tool lists and hooks; an
+  agent refusing a forbidden command proves its manners, not the guard.
 - **Owners are processed in parallel.** Tests (and code) must not assume an order between messages
   from different owners.
 
