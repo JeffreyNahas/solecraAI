@@ -30,6 +30,7 @@ log = logging.getLogger(__name__)
 JOB_LABELS: dict[str, str] = {
     "selftest_ok": "Self-test",
     "selftest_fail": "Self-test (forced failure)",
+    "permits_ingest": "The morning building-permits lead search",
 }
 
 

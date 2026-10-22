@@ -23,9 +23,16 @@ async def selftest_fail(deps: Deps, run: RunHandle) -> None:
     raise RuntimeError("forced failure (selftest_fail) to test alerts and issue reporting")
 
 
+async def permits_ingest(deps: Deps, run: RunHandle) -> None:
+    from app.permits.ingest import permits_ingest_job
+
+    await permits_ingest_job(deps, run)
+
+
 JOBS: dict[str, Job] = {
     "selftest_ok": selftest_ok,
     "selftest_fail": selftest_fail,
+    "permits_ingest": permits_ingest,
 }
 
 

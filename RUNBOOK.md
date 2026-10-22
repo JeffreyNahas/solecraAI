@@ -190,6 +190,19 @@ curl https://bot.<domain>/health      # Caddy gets the HTTPS certificate automat
 
 Then in Meta, change the webhook Callback URL to `https://bot.<domain>/webhook` and verify again.
 
+**Before the domain is ready: daily jobs only.** The scheduled jobs (§7b, §7c) don't need the domain;
+only Meta's webhook does. Without the `prod` profile, Compose starts Postgres, the API (bound to
+`127.0.0.1`, not reachable from outside) and the scheduler, and no Caddy:
+```bash
+# clone and fill .env as above (also OPENROUTER_API_KEY, OWNER_PHONES and the WhatsApp keys for alerts)
+docker compose up -d --build
+docker compose logs scheduler | grep scheduled     # "scheduled permits_ingest at '0 6 * * *' (America/Montreal)"
+docker compose exec scheduler python -m scripts.run_job permits_ingest     # optional: first run now
+```
+Once DNS works, `docker compose --profile prod up -d --build` adds Caddy (same data, nothing lost).
+Failure alerts go out on WhatsApp, so they only arrive while the WhatsApp token is valid (the
+temporary one lasts ~24 h; the long-lived one is in #5).
+
 ### 6.4 Backups
 
 ```bash
@@ -234,6 +247,8 @@ Run the Gate 1 checklist (section 4) against the server, using
 | Restart | — | `docker compose --profile prod restart api` |
 | Deploy update | `make deploy` | `git pull && docker compose --profile prod up -d --build` |
 | Backup now | `make backup` | `./scripts/backup.sh` |
+| Scheduler logs | — | `docker compose logs -f --tail 100 scheduler` (scheduled jobs, next run times) |
+| Job history | — | `docker compose exec postgres psql -U solecra -c "select id,job,status,counts,error from runs order by id desc limit 10"` |
 | Stuck messages | — | `select message_id,status,attempts,last_error from inbound_messages where status<>'done'` |
 | Change owners | — | edit `OWNER_PHONES` in `.env`, then `docker compose --profile prod up -d api` |
 
@@ -244,6 +259,22 @@ Run the Gate 1 checklist (section 4) against the server, using
 - Meta says webhook verification failed → `WHATSAPP_VERIFY_TOKEN` mismatch or URL not reachable.
 
 ---
+
+## 7b. Permits lead search (06:00 daily)
+
+Runs in the `scheduler` container. Needs `OPENROUTER_API_KEY` for scoring (without it, leads are
+inserted but not scored; they get scored on the next run that has a key).
+
+```bash
+docker compose exec scheduler python -m scripts.run_job permits_ingest      # run it now
+docker compose exec postgres psql -U solecra -c "select status, count(*), avg(score)::int from leads where source='permit' group by 1"
+docker compose exec postgres psql -U solecra -c "select counts from runs where job='permits_ingest' order by id desc limit 1"
+```
+Tuning (in `.env`, then `docker compose up -d scheduler`): `LEAD_SCORE_THRESHOLD`, `PERMITS_MAX_KM`,
+`PERMITS_MIN_UNITS`, `SCORING_MAX_PER_RUN`. If the city's site returns 403 for a while, its firewall
+is rate-limiting: the job retries with backoff; the next successful run fetches everything since the
+last success (minus 14 days), so nothing is missed. If scoring fails for every lead (e.g. bad key),
+the run is marked failed and owners are alerted.
 
 ## 8. Job failure alerts and `[agent]` GitHub issues
 

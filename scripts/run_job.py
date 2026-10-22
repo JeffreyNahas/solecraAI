@@ -12,12 +12,8 @@ import logging
 import sys
 
 from app.config import get_settings
-from app.db.session import make_engine, make_sessionmaker
-from app.deps import Deps
 from app.jobs import JOBS, run_job
-from app.owners import sync_owners
-from app.tools.github_issues import GitHubIssueReporter
-from app.whatsapp.client import WhatsAppClient
+from app.jobs.runtime import job_deps
 
 
 async def main(name: str) -> int:
@@ -25,17 +21,8 @@ async def main(name: str) -> int:
     logging.basicConfig(
         level=settings.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
-    engine = make_engine(settings)
-    sessionmaker = make_sessionmaker(engine)
-    await sync_owners(sessionmaker, settings.owners())
-    wa = WhatsAppClient(settings, sessionmaker)
-    issues = GitHubIssueReporter(settings.github_issues_token, settings.github_repo, sessionmaker)
-    try:
-        run_id, status = await run_job(Deps(settings, sessionmaker, wa, issues), name)
-    finally:
-        await wa.aclose()
-        await issues.aclose()
-        await engine.dispose()
+    async with job_deps(settings) as deps:
+        run_id, status = await run_job(deps, name)
     print(f"run {run_id}: {status}")
     return 0 if status == "succeeded" else 1
 

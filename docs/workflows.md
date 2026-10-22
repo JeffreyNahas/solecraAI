@@ -87,6 +87,71 @@ Run one by hand: `uv run python -m scripts.run_job <name>` (server: `docker comp
 - Alerting errors are logged and never replace the job's own error.
 - Owner labels for jobs: `JOB_LABELS` in `app/runs.py`.
 
+## Scheduler (`app/scheduler.py`, container `scheduler`)
+Runs registered jobs on the timetable in `SCHEDULE` (cron, **America/Montreal**). One instance per
+job at a time; after downtime a missed slot runs once (not once per missed slot), within 1 h.
+Jobs listed but not yet registered in `app/jobs.JOBS` are skipped with a warning.
+
+| Job | When | Status |
+|---|---|---|
+| `permits_ingest` | 06:00 daily | Montréal permits → scored leads (`app/permits/`) |
+
+## Permits → leads (`app/permits/`, `app/scoring.py`)
+```
+city permits ─► Permit (our model) ─► filters ─► insert_lead (dedupe) ─► score (cheap LLM) ─► keep | disqualify
+```
+1. **Source → `Permit`** (`app/permits/model.py`): our own categories (`WorkCategory`,
+   `BuildingCategory`), so a change in the city's format touches one mapping function.
+2. **Filters** (`app/permits/filters.py`, decided 2026-10-22): keep new construction, major
+   renovation, change of use, commercial fit-out, condo conversion; on multi-residential with
+   ≥ `PERMITS_MIN_UNITS` units, commercial, office or institutional buildings; within
+   `PERMITS_MAX_KM` of downtown (haversine; permits without coordinates are kept). Single-family
+   homes are skipped (no contact data → no CASL-compliant email).
+3. **Insert** as `source=permit`, `source_ref=<permit id>`, status `new`, language `fr`, with
+   `source_details`. Same permit → `duplicates`. **Another permit at an address that already has a
+   permit lead** (decided 2026-10-22): added to that lead (`source_details.other_permits`,
+   `permit_ids`); if the lead is still `new` or was disqualified **by its score**, its score is cleared
+   (`disqualified → new` via `app/leads.reopen`) and it is re-scored with every permit at the address
+   (`rescored`); leads further along just keep the permit (`permits_added`).
+4. **Score** (`app/scoring.py`): cheap model via `app/llm.py`, rubric `app/skills/lead_scoring.md`,
+   output `{score 0–100, reason}`. Only the permit's public facts are sent; the address and coordinate
+   fields are not. The city's free-text description is sent as-is (it can mention a civic number or a
+   business name) and is wrapped in `<permit>` tags as data. Up to `SCORING_MAX_PER_RUN` per run,
+   including leads left unscored by an earlier failed run.
+   **Failures alert:** if leads were waiting and **none** could be scored (no key, bad key, wrong
+   model id, no zero-retention provider), the run fails, so owners get the failure alert and
+   repeated failures open an `[agent]` issue. Inserted leads stay and are scored by the next run.
+   Cost of failed calls is counted too.
+5. **Threshold:** score < `LEAD_SCORE_THRESHOLD` → `disqualified` (audited with the score); otherwise
+   the lead stays `new`, ready for research (#8). Score writes are version-checked.
+
+Run counts: `seen`, `filtered_out` (+ `filtered_work|building|units_below_min|too_far`),
+`inserted`, `duplicates`, `rescored`, `permits_added`, `permit_conflicts`, `scored`, `scoring_errors`, `above_threshold`, `below_threshold`,
+`llm_tokens`, `llm_cost_microusd`.
+
+### Source: City of Montréal open data (`app/permits/montreal.py`)
+Dataset `permis-construction` (CC BY 4.0, published **weekly**), CKAN datastore resource
+`5232a72d-…`, queried with the SQL API (POST). Only `CO` (construction) and `TR` (transformation)
+are fetched; `CA` certificates and `DE` demolitions can't be leads. First run looks back
+`PERMITS_LOOKBACK_DAYS`; later runs fetch from the **last successful run minus 14 days** (weekly
+publication + overlap), so an outage of any length is caught up. Dedupe absorbs the overlap.
+The city's firewall blocks bursts: one query per 1,000 rows, 2 s between pages, backoff 30 s / 2 min /
+5 min on 403/429/5xx, identifying User-Agent.
+
+Mapping (labels differ by borough): units are parsed as a **lower bound** from the building label
+(`"5 à 11 Logements"` → 5, `Multifamiliale`/`Condominium` → 4, `Multiplex` → 2), `nb_logements`
+used when larger. Work type from the city label + description keywords; plain transformations are
+`major_renovation` and the scoring step judges how major they are.
+
+Real dry run (2026-10-22, last 30 days): 1,045 fetched → 294 kept (157 multi-residential,
+110 commercial, 21 institutional, 6 office); dropped 410 < 4 units, 295 other buildings, 46 minor work.
+
+## LLM calls (`app/llm.py`)
+One client for every model call: OpenRouter chat API, model per step in `routes()` (overridable by
+settings), fallbacks via OpenRouter `models`, strict JSON-schema structured output validated by a
+Pydantic model (one retry with the validation error), timeouts and retries (3 tries on 408/429/5xx;
+a 429 waits until the rate-limit window resets, max 65 s), zero data retention (`provider.data_collection=deny`, `zdr=true`), usage and cost returned to the caller.
+
 ## Planned (Phase 1)
-Scheduler container running the jobs on the CLAUDE.md §7 timetable; outreach graphs (ingest, research,
-draft, send, replies) — CLAUDE.md §7.
+Research (#8), drafting and sending (#10), replies (#11),
+owner chat and digest (#12) — CLAUDE.md §7.

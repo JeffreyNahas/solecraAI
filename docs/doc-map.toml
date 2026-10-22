@@ -3,7 +3,7 @@
 
 [[map]]
 doc = "docs/architecture.md"
-code = ["app/main.py", "app/deps.py", "docker-compose.yml", "Dockerfile", "Caddyfile", "app/db/session.py"]
+code = ["app/main.py", "app/deps.py", "app/scheduler.py", "docker-compose.yml", "Dockerfile", "Caddyfile", "app/db/session.py"]
 
 [[map]]
 doc = "docs/data-model.md"
@@ -11,7 +11,7 @@ code = ["app/db/models.py", "app/db/migrations/*", "app/db/migrations/versions/*
 
 [[map]]
 doc = "docs/workflows.md"
-code = ["app/worker.py", "app/handlers.py", "app/approvals.py", "app/graphs/*", "app/scheduler*", "app/runs.py", "app/jobs/*", "app/tools/github_issues.py"]
+code = ["app/worker.py", "app/handlers.py", "app/approvals.py", "app/graphs/*", "app/scheduler*", "app/runs.py", "app/jobs/*", "app/tools/github_issues.py", "app/llm.py", "app/scoring.py", "app/permits/*", "app/skills/*"]
 
 [[map]]
 doc = "docs/whatsapp-integration.md"

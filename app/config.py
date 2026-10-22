@@ -32,8 +32,18 @@ class Settings(BaseSettings):
     # Optional: save raw webhook bodies here (dev only) to build test fixtures.
     webhook_capture_dir: str | None = None
 
-    # Later phases
+    # LLMs via OpenRouter (app/llm.py). Model per step is in the routing table there;
+    # these override it without a code change.
     openrouter_api_key: str = ""
+    llm_model_scoring: str = "anthropic/claude-haiku-4.5"
+    llm_fallback_models: str = ""  # comma-separated OpenRouter model ids, tried in order
+
+    # Permits ingestion and scoring (step 9). Open decisions: keep configurable (CLAUDE.md §11).
+    permits_lookback_days: int = Field(default=30, ge=1)
+    permits_max_km: float = Field(default=30.0, gt=0)
+    permits_min_units: int = Field(default=4, ge=1)
+    lead_score_threshold: int = Field(default=60, ge=0, le=100)
+    scoring_max_per_run: int = Field(default=100, ge=1)
 
     # Run tracking: after this many failures in a row, open/update a GitHub issue.
     run_failure_issue_threshold: int = Field(default=3, ge=1)
@@ -51,6 +61,9 @@ class Settings(BaseSettings):
     def _strip_driver(cls, v: str) -> str:
         # Accept either form; we store the plain libpq URL.
         return v.replace("postgresql+psycopg://", "postgresql://")
+
+    def fallback_models(self) -> list[str]:
+        return [m.strip() for m in self.llm_fallback_models.split(",") if m.strip()]
 
     @property
     def sqlalchemy_url(self) -> str:

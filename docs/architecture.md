@@ -10,7 +10,7 @@ using the service name as hostname (e.g. `api:8000`, `postgres:5432`).
 | `caddy` | `caddy:2` | HTTPS front door: gets a Let's Encrypt certificate for `BOT_DOMAIN`, forwards to `api:8000`. Only started with `--profile prod`. | 80, 443 (public) |
 | `api` | built from `Dockerfile` | FastAPI app + background worker + LangGraph graphs. Runs `alembic upgrade head` on start. | `127.0.0.1:8000` only |
 | `postgres` | `postgres:16` | All state. Data in the `pgdata` volume. | `127.0.0.1:5432` only |
-| `scheduler` | *(Phase 1, not built yet)* | Timed jobs (daily lead pull, drafts, digest) | none |
+| `scheduler` | built from `Dockerfile` (`python -m app.scheduler`) | Timed jobs on the America/Montreal timetable (`app/scheduler.py`); starts after `api` is healthy (migrations done) | none |
 
 Why separate: only Caddy faces the internet; data outlives app rebuilds; each part restarts or
 updates on its own; Postgres and Caddy use official images.
@@ -92,6 +92,11 @@ Everything from the FastAPI route onward is identical.
 | `app/suppression.py` | Do-not-email list |
 | `app/runs.py` | Run tracking, failure alerts |
 | `app/jobs/` | Job registry (`run_job`) |
-| `app/tools/` | External APIs (GitHub issues; later permits, Gmail, Calendar…) |
+| `app/tools/` | Shared external APIs used across features (GitHub issues; later Gmail, Calendar…). A source used by one feature lives with it (e.g. `app/permits/montreal.py`: client + mapping) |
 | `app/redact.py` | Strip emails/phones from outgoing technical text |
+| `app/llm.py` | The only way to call an LLM (OpenRouter) |
+| `app/scoring.py` | Lead scoring step (cheap model + rubric) |
+| `app/permits/` | Permit model, filters, permits → leads pipeline |
+| `app/scheduler.py` | Scheduler process |
+| `app/skills/` | Versioned playbooks injected into LLM steps (`lead_scoring.md` v1) |
 | `app/db/` | Models, session, audit helper, migrations |

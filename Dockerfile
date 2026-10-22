@@ -15,6 +15,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 COPY alembic.ini ./
 COPY app ./app
+COPY scripts ./scripts
 RUN uv sync --frozen --no-dev
 
 RUN useradd --create-home --uid 1000 solecra
