@@ -51,3 +51,36 @@ def test_read_only_commands_allowed(cmd):
 )
 def test_writes_and_unknown_commands_blocked(cmd):
     assert guard.check(cmd) is not None
+
+
+def _run_hook(payload: dict) -> tuple[int, str]:
+    import json
+    import subprocess
+
+    proc = subprocess.run(
+        ["python3", str(Path(__file__).parents[1] / ".claude/hooks/reviewer_bash_guard.py")],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+    )
+    return proc.returncode, proc.stderr
+
+
+def test_hook_blocks_pr_reviewer():
+    code, err = _run_hook(
+        {"agent_type": "pr-reviewer", "tool_name": "Bash", "tool_input": {"command": "whoami"}}
+    )
+    assert code == 2 and "Blocked by reviewer read-only guard" in err
+
+
+def test_hook_allows_pr_reviewer_reads():
+    payload = {"agent_type": "pr-reviewer", "tool_name": "Bash", "tool_input": {"command": "git log -1"}}
+    assert _run_hook(payload) == (0, "")
+
+
+@pytest.mark.parametrize("agent_type", [None, "architect", "log-triage", "general-purpose"])
+def test_hook_ignores_main_session_and_other_agents(agent_type):
+    payload = {"tool_name": "Bash", "tool_input": {"command": "git commit -m x && rm -rf build"}}
+    if agent_type:
+        payload["agent_type"] = agent_type
+    assert _run_hook(payload) == (0, "")

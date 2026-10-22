@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-"""PreToolUse hook for the pr-reviewer agent: only read-only shell commands may run.
+"""PreToolUse hook (registered in .claude/settings.json): the pr-reviewer agent may only run
+read-only shell commands. Every other agent and the main session are not affected.
 
+Claude Code puts `"agent_type": "pr-reviewer"` in the hook input for that agent's tool calls.
+Hooks in an agent's own frontmatter were found NOT to be applied, hence the project-level hook.
 Reads the hook JSON on stdin; exit 0 = allow, exit 2 = block (reason on stderr, shown to the agent).
 The allowlist is deliberately small: reading code and git history, running lint in check mode and
 tests. Anything else (writes, pushes, redirects, command substitution) is blocked.
@@ -11,6 +14,7 @@ import re
 import shlex
 import sys
 
+GUARDED_AGENT = "pr-reviewer"
 GIT_READ = {"diff", "log", "show", "status", "rev-parse", "ls-files", "grep", "blame", "branch", "merge-base"}
 SIMPLE = {
     "cat",
@@ -96,7 +100,7 @@ def check(command: str) -> str | None:
 
 def main() -> int:
     data = json.load(sys.stdin)
-    if data.get("tool_name") != "Bash":
+    if data.get("agent_type") != GUARDED_AGENT or data.get("tool_name") != "Bash":
         return 0
     reason = check((data.get("tool_input") or {}).get("command", ""))
     if reason:
