@@ -77,7 +77,7 @@ Written for: owner sync, ignored non-owners, demo start, approval requested/deci
 | `consent_source_url`, `consent_captured_at`, `consent_role`, `relevance_note` | CASL consent evidence, set by the research step only when the consent check passes (`app/guards/consent.py`) |
 | `score_reason` | One line from the scoring step (why this score) |
 | `research_details` | Research step record (`app/jobs/lead_research.py`): `researched_at`, `attempts`, model, turns, searches, cost, tool calls, answer (no email/phone/name), `consent_check` with evidence (URL, fetch time, page hash, excerpt), `same_company_lead_ids`, `result` |
-| `source_details` | Public facts from the source record (permit work/building type, units, issue date, description). **No address/coordinates/personal data** — those stay in their own columns |
+| `source_details` | Public facts from the source record (permit work/building type, units, issue date, description). Permits: later permits at the same address in `permit_ids` and `other_permits` (newest last, max 10). **No address/coordinates/personal data** — those stay in their own columns |
 | `owner_assigned` | Owner phone, optional (leads are shared) |
 | `email_domain`, `phone_normalized`, `address_normalized` | Dedupe keys, computed in `app/leads.py`, indexed |
 | `created_at`, `updated_at`, `version` | `version` +1 on every status change (optimistic locking) |
@@ -99,6 +99,8 @@ new → researched → qualified → drafted → approved → sent → follow_up
 any non-final → disqualified | no_valid_contact        any → do_not_contact        lost → replied
 ```
 Each transition: `UPDATE … WHERE id AND version AND status` (first writer wins), audited as `lead_status`.
+One way back from an exit: `app/leads.reopen` (`disqualified → new`, version-checked, audited), used
+only by the permits pipeline when a new permit arrives for a lead its score disqualified.
 
 ### `touches`
 `lead_id` FK (cascade), `direction` (`in`/`out`), `type` (`initial`/`follow_up`/`reply`/`owner_response`),

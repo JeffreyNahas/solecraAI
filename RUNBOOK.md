@@ -190,6 +190,19 @@ curl https://bot.<domain>/health      # Caddy gets the HTTPS certificate automat
 
 Then in Meta, change the webhook Callback URL to `https://bot.<domain>/webhook` and verify again.
 
+**Before the domain is ready: daily jobs only.** The scheduled jobs (§7b, §7c) don't need the domain;
+only Meta's webhook does. Without the `prod` profile, Compose starts Postgres, the API (bound to
+`127.0.0.1`, not reachable from outside) and the scheduler, and no Caddy:
+```bash
+# clone and fill .env as above (also OPENROUTER_API_KEY, OWNER_PHONES and the WhatsApp keys for alerts)
+docker compose up -d --build
+docker compose logs scheduler | grep scheduled     # "scheduled permits_ingest at '0 6 * * *' (America/Montreal)"
+docker compose exec scheduler python -m scripts.run_job permits_ingest     # optional: first run now
+```
+Once DNS works, `docker compose --profile prod up -d --build` adds Caddy (same data, nothing lost).
+Failure alerts go out on WhatsApp, so they only arrive while the WhatsApp token is valid (the
+temporary one lasts ~24 h; the long-lived one is in #5).
+
 ### 6.4 Backups
 
 ```bash

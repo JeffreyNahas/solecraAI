@@ -8,8 +8,9 @@ The model only proposes; `app/guards/consent.py` decides whether the contact may
 Page text reaches the model inside <page> blocks marked as untrusted data (CLAUDE.md §2 rule 5).
 """
 
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -53,7 +54,7 @@ class FetchArgs(BaseModel):
     url: str = Field(description="Full http(s) URL of the page to read")
 
 
-def research_facts(permit: Permit, address: str) -> str:
+def research_facts(permit: Permit, address: str, other_permits: Sequence[dict[str, Any]] = ()) -> str:
     lines = [
         f"address: {address}, Montréal, QC",
         f"borough: {permit.borough or 'unknown'}",
@@ -64,6 +65,12 @@ def research_facts(permit: Permit, address: str) -> str:
     ]
     description = _defang(permit.description or "")[:1000]
     lines.append(f"description: {description or 'none'}")
+    for other in other_permits:
+        other_desc = _defang(str(other.get("description") or ""))[:300]
+        lines.append(
+            f"other permit at this address: issued {other.get('issued_on') or 'unknown'}, "
+            f"work {other.get('work')}, description: {other_desc or 'none'}"
+        )
     return (
         "Find the company behind this project and a published business email.\n<permit>\n"
         + "\n".join(lines)
@@ -101,13 +108,18 @@ def page_tool(fetcher: PageFetcher) -> Tool:
 
 
 async def research_permit(
-    llm: LLM, fetcher: PageFetcher, settings: Settings, permit: Permit, address: str
+    llm: LLM,
+    fetcher: PageFetcher,
+    settings: Settings,
+    permit: Permit,
+    address: str,
+    other_permits: Sequence[dict[str, Any]] = (),
 ) -> AgentResult[ResearchOutcome]:
     system = SYSTEM.format(playbook=PLAYBOOK_PATH.read_text())
     return await llm.agent(
         "lead_research",
         system,
-        research_facts(permit, address),
+        research_facts(permit, address, other_permits),
         ResearchOutcome,
         [page_tool(fetcher)],
         max_turns=settings.research_max_turns,

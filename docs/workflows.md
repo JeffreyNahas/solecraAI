@@ -109,7 +109,11 @@ city permits ─► Permit (our model) ─► filters ─► insert_lead (dedupe
    `PERMITS_MAX_KM` of downtown (haversine; permits without coordinates are kept). Single-family
    homes are skipped (no contact data → no CASL-compliant email).
 3. **Insert** as `source=permit`, `source_ref=<permit id>`, status `new`, language `fr`, with
-   `source_details`. Same permit or a dedupe match → counted as `duplicates`.
+   `source_details`. Same permit → `duplicates`. **Another permit at an address that already has a
+   permit lead** (decided 2026-10-22): added to that lead (`source_details.other_permits`,
+   `permit_ids`); if the lead is still `new` or was disqualified **by its score**, its score is cleared
+   (`disqualified → new` via `app/leads.reopen`) and it is re-scored with every permit at the address
+   (`rescored`); leads further along just keep the permit (`permits_added`).
 4. **Score** (`app/scoring.py`): cheap model via `app/llm.py`, rubric `app/skills/lead_scoring.md`,
    output `{score 0–100, reason}`. Only the permit's public facts are sent; the address and coordinate
    fields are not. The city's free-text description is sent as-is (it can mention a civic number or a
@@ -123,7 +127,7 @@ city permits ─► Permit (our model) ─► filters ─► insert_lead (dedupe
    the lead stays `new`, ready for research (#8). Score writes are version-checked.
 
 Run counts: `seen`, `filtered_out` (+ `filtered_work|building|units_below_min|too_far`),
-`inserted`, `duplicates`, `scored`, `scoring_errors`, `above_threshold`, `below_threshold`,
+`inserted`, `duplicates`, `rescored`, `permits_added`, `permit_conflicts`, `scored`, `scoring_errors`, `above_threshold`, `below_threshold`,
 `llm_tokens`, `llm_cost_microusd`.
 
 ### Source: City of Montréal open data (`app/permits/montreal.py`)

@@ -99,7 +99,8 @@ async def research_lead(deps: Deps, run: RunHandle, fetcher: PageFetcher, lead: 
     permit = Permit.model_validate({**(lead.source_details or {}), "permit_id": lead.source_ref})
 
     try:
-        result = await research_permit(deps.llm, fetcher, deps.settings, permit, lead.address or "")
+        others = (lead.source_details or {}).get("other_permits", [])
+        result = await research_permit(deps.llm, fetcher, deps.settings, permit, lead.address or "", others)
     except LLMError as exc:
         log.exception("research failed for lead %s", lead.id)
         run.add("research_errors")

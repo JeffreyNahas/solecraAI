@@ -253,3 +253,22 @@ async def transition(
     audit(session, actor, "lead_status", "lead", lead_id, frm=lead.status, to=new_status, reason=reason)
     await session.refresh(lead)
     return lead
+
+
+async def reopen(
+    session: AsyncSession, lead_id: int, *, expected_version: int, actor: str, reason: str
+) -> None:
+    """`disqualified` → `new`, so the lead is scored again (e.g. a new permit at the same address).
+
+    Deliberately outside `transition()`: exits are final for everything else. Callers decide when
+    a disqualification may be revisited (the permits pipeline: only one made by the score)."""
+    result = await session.execute(
+        update(Lead)
+        .where(Lead.id == lead_id, Lead.version == expected_version, Lead.status == "disqualified")
+        .values(status="new", version=Lead.version + 1)
+        .returning(Lead.version)
+        .execution_options(synchronize_session=False)
+    )
+    if result.scalar_one_or_none() is None:
+        raise TransitionError(f"lead {lead_id} is not disqualified at version {expected_version}")
+    audit(session, actor, "lead_status", "lead", lead_id, frm="disqualified", to="new", reason=reason)
