@@ -259,7 +259,9 @@ docker compose exec postgres psql -U solecra -c "select counts from runs where j
 ```
 Tuning (in `.env`, then `docker compose up -d scheduler`): `LEAD_SCORE_THRESHOLD`, `PERMITS_MAX_KM`,
 `PERMITS_MIN_UNITS`, `SCORING_MAX_PER_RUN`. If the city's site returns 403 for a while, its firewall
-is rate-limiting: the job retries with backoff and the next day's run catches up.
+is rate-limiting: the job retries with backoff; the next successful run fetches everything since the
+last success (minus 14 days), so nothing is missed. If scoring fails for every lead (e.g. bad key),
+the run is marked failed and owners are alerted.
 
 ## 8. Job failure alerts and `[agent]` GitHub issues
 

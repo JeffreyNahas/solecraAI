@@ -49,7 +49,12 @@ class LLMResult[T: BaseModel]:
 
 
 class LLMError(Exception):
-    pass
+    """A failed step. Carries the usage already billed for it (e.g. invalid output, then retry)."""
+
+    def __init__(self, message: str, tokens: int = 0, cost_usd: float = 0.0) -> None:
+        super().__init__(message)
+        self.tokens = tokens
+        self.cost_usd = cost_usd
 
 
 class LLM:
@@ -87,7 +92,11 @@ class LLM:
                 data = schema.model_validate(json.loads(content))
             except (json.JSONDecodeError, ValidationError) as exc:
                 if attempt == 2:
-                    raise LLMError(f"{step}: invalid structured output after retry: {exc}") from exc
+                    raise LLMError(
+                        f"{step}: invalid structured output after retry: {exc}",
+                        tokens=total_in + total_out,
+                        cost_usd=total_cost,
+                    ) from exc
                 log.warning("%s: invalid structured output, retrying once", step)
                 messages = [
                     *messages,

@@ -105,7 +105,9 @@ class MontrealPermitSource:
 
 
 def _plain(text: str | None) -> str:
-    return unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode().lower()
+    # Typographic apostrophes (’) would be dropped by the ASCII step; keep them as '.
+    text = (text or "").replace("\u2019", "'").replace("\u02bc", "'")
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().lower()
 
 
 _MINOR_LABEL = re.compile(

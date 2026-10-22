@@ -134,10 +134,74 @@ async def test_scoring_respects_cap_and_missing_llm(deps):
     await ingest_permits(deps, run, [permit("A"), permit("B"), permit("C")])
     assert run.counts["inserted"] == 3 and run.counts["scored"] == 2
 
+    # No LLM configured while a lead waits for a score: the run fails (so owners/Jeff are alerted).
     deps.llm = None
     run2 = RunHandle(0, "permits_ingest")
-    await ingest_permits(deps, run2, [])
+    with pytest.raises(LLMError, match="no LLM configured"):
+        await ingest_permits(deps, run2, [])
     assert run2.counts == {"scoring_skipped": 1}
+
+    # Nothing waiting: no LLM needed, no failure.
+    deps.llm = scripted_llm([90])
+    await ingest_permits(deps, RunHandle(0, "permits_ingest"), [])
+    deps.llm = None
+    run3 = RunHandle(0, "permits_ingest")
+    await ingest_permits(deps, run3, [])
+    assert run3.counts == {}
+
+
+async def test_all_scoring_failing_fails_the_run_and_counts_billed_cost(deps):
+    deps.llm = scripted_llm([LLMError("bad key", tokens=50, cost_usd=0.0002), LLMError("bad key")])
+    run = RunHandle(0, "permits_ingest")
+    with pytest.raises(LLMError, match="scoring failed for all 2 leads"):
+        await ingest_permits(deps, run, [permit("A"), permit("B")])
+    assert run.counts["inserted"] == 2 and run.counts["scoring_errors"] == 2
+    assert run.counts["llm_cost_microusd"] == 200 and run.counts["llm_tokens"] == 50
+    async with deps.sessionmaker() as s:  # inserts were kept for the next run
+        assert len((await s.execute(select(Lead))).scalars().all()) == 2
+
+
+async def test_fetch_window_follows_last_successful_run(deps, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    from app.db.models import Run
+    from app.permits import ingest as ingest_mod
+
+    seen = []
+
+    class FakeSource:
+        async def fetch_since(self, since):
+            seen.append(since)
+            return []
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr("app.permits.montreal.MontrealPermitSource", FakeSource)
+    deps.settings = deps.settings.model_copy(update={"permits_lookback_days": 30})
+    await ingest_mod.permits_ingest_job(deps, RunHandle(0, "permits_ingest"))
+    assert seen[-1] == date.today() - timedelta(days=30)  # first run
+
+    async with deps.sessionmaker() as s:  # last success 20 days ago (e.g. a long outage)
+        s.add(
+            Run(
+                job="permits_ingest",
+                status="succeeded",
+                counts={},
+                started_at=datetime.now(UTC) - timedelta(days=20),
+            )
+        )
+        s.add(
+            Run(
+                job="permits_ingest",
+                status="failed",
+                counts={},
+                started_at=datetime.now(UTC) - timedelta(days=1),
+            )
+        )
+        await s.commit()
+    await ingest_mod.permits_ingest_job(deps, RunHandle(0, "permits_ingest"))
+    assert seen[-1] == (datetime.now(UTC) - timedelta(days=20)).date() - timedelta(days=14)
 
 
 async def test_scheduler_skips_unregistered_and_uses_montreal_time(deps, monkeypatch):

@@ -110,9 +110,14 @@ city permits ─► Permit (our model) ─► filters ─► insert_lead (dedupe
 3. **Insert** as `source=permit`, `source_ref=<permit id>`, status `new`, language `fr`, with
    `source_details`. Same permit or a dedupe match → counted as `duplicates`.
 4. **Score** (`app/scoring.py`): cheap model via `app/llm.py`, rubric `app/skills/lead_scoring.md`,
-   output `{score 0–100, reason}`. Only the permit's public facts are sent (no address); the city's
-   free-text description is wrapped in `<permit>` tags as data. Up to `SCORING_MAX_PER_RUN` per run,
+   output `{score 0–100, reason}`. Only the permit's public facts are sent; the address and coordinate
+   fields are not. The city's free-text description is sent as-is (it can mention a civic number or a
+   business name) and is wrapped in `<permit>` tags as data. Up to `SCORING_MAX_PER_RUN` per run,
    including leads left unscored by an earlier failed run.
+   **Failures alert:** if leads were waiting and **none** could be scored (no key, bad key, wrong
+   model id, no zero-retention provider), the run fails, so owners get the failure alert and
+   repeated failures open an `[agent]` issue. Inserted leads stay and are scored by the next run.
+   Cost of failed calls is counted too.
 5. **Threshold:** score < `LEAD_SCORE_THRESHOLD` → `disqualified` (audited with the score); otherwise
    the lead stays `new`, ready for research (#8). Score writes are version-checked.
 
@@ -124,7 +129,8 @@ Run counts: `seen`, `filtered_out` (+ `filtered_work|building|units_below_min|to
 Dataset `permis-construction` (CC BY 4.0, published **weekly**), CKAN datastore resource
 `5232a72d-…`, queried with the SQL API (POST). Only `CO` (construction) and `TR` (transformation)
 are fetched; `CA` certificates and `DE` demolitions can't be leads. First run looks back
-`PERMITS_LOOKBACK_DAYS`, later runs 14 days (weekly publication + overlap; dedupe absorbs repeats).
+`PERMITS_LOOKBACK_DAYS`; later runs fetch from the **last successful run minus 14 days** (weekly
+publication + overlap), so an outage of any length is caught up. Dedupe absorbs the overlap.
 The city's firewall blocks bursts: one query per 1,000 rows, 2 s between pages, backoff 30 s / 2 min /
 5 min on 403/429/5xx, identifying User-Agent.
 

@@ -124,6 +124,8 @@ def test_nb_logements_overrides_when_larger():
             W.COMMERCIAL_FITOUT,
         ),
         ("TR", "Transformation", "Conversion de l'immeuble en copropriété divise", W.CONDO_CONVERSION),
+        ("TR", "Transformation", "Changement d\u2019usage du rez-de-chaussée", W.CHANGE_OF_USE),
+        ("TR", "Transformation", "Aménager l\u2019espace pour un bureau", W.COMMERCIAL_FITOUT),
         (
             "TR",
             "Travaux extérieurs",

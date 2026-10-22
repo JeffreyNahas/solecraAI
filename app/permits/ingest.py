@@ -12,7 +12,7 @@ from collections.abc import Iterable
 
 from sqlalchemy import select, update
 
-from app.db.models import Lead
+from app.db.models import Lead, Run
 from app.deps import Deps
 from app.leads import LeadIn, TransitionError, insert_lead, transition
 from app.llm import LLMError
@@ -24,6 +24,7 @@ from app.scoring import score_permit
 log = logging.getLogger(__name__)
 
 SOURCE = "permit"
+OVERLAP_DAYS = 14
 
 
 def to_lead(permit: Permit) -> LeadIn:
@@ -53,11 +54,12 @@ async def ingest_permits(deps: Deps, run: RunHandle, permits: Iterable[Permit]) 
 
 
 async def score_pending(deps: Deps, run: RunHandle) -> None:
-    """Score permit leads that are still `new` and unscored, up to the per-run cap."""
-    if deps.llm is None:
-        log.warning("no LLM configured; scoring skipped")
-        run.add("scoring_skipped")
-        return
+    """Score permit leads that are still `new` and unscored, up to the per-run cap.
+
+    Raises LLMError when leads were waiting and none could be scored (no LLM configured, bad key,
+    wrong model id…), so the run is marked failed and owners/Jeff are alerted. Inserted leads are
+    already committed and get scored by the next run.
+    """
     async with deps.sessionmaker() as session:
         leads = (
             (
@@ -71,19 +73,31 @@ async def score_pending(deps: Deps, run: RunHandle) -> None:
             .scalars()
             .all()
         )
+    if not leads:
+        return
+    if deps.llm is None:
+        run.add("scoring_skipped", len(leads))
+        raise LLMError(
+            f"no LLM configured (OPENROUTER_API_KEY empty); {len(leads)} leads waiting for a score"
+        )
 
     for lead in leads:
         permit = Permit.model_validate({**(lead.source_details or {}), "permit_id": lead.source_ref})
         try:
             result = await score_permit(deps.llm, permit)
-        except LLMError:
+        except LLMError as exc:
             log.exception("scoring failed for lead %s", lead.id)
             run.add("scoring_errors")
+            run.add("llm_cost_microusd", round(exc.cost_usd * 1_000_000))  # failed calls are billed too
+            run.add("llm_tokens", exc.tokens)
             continue
         run.add("scored")
         run.add("llm_cost_microusd", round(result.cost_usd * 1_000_000))
         run.add("llm_tokens", result.prompt_tokens + result.completion_tokens)
         await _apply_score(deps, run, lead, result.data.score, result.data.reason)
+
+    if run.counts.get("scored", 0) == 0:
+        raise LLMError(f"scoring failed for all {len(leads)} leads (see scoring_errors and the logs)")
 
 
 async def _apply_score(deps: Deps, run: RunHandle, lead: Lead, score: int, reason: str) -> None:
@@ -119,17 +133,28 @@ async def _apply_score(deps: Deps, run: RunHandle, lead: Lead, score: int, reaso
 async def permits_ingest_job(deps: Deps, run: RunHandle) -> None:
     """Daily job: pull recent Montréal permits and turn the relevant ones into scored leads.
 
-    First run (no permit leads yet) looks back PERMITS_LOOKBACK_DAYS; later runs look back 14 days,
-    which covers the dataset's weekly publication with overlap (dedupe absorbs repeats).
+    Fetches permits issued since the last successful run minus a 14-day overlap (the city
+    publishes weekly), so an outage of any length is caught up; first run: PERMITS_LOOKBACK_DAYS.
+    Dedupe absorbs the overlap.
     """
     from datetime import date, timedelta
 
     from app.permits.montreal import MontrealPermitSource, to_permit
 
     async with deps.sessionmaker() as session:
-        has_leads = (await session.execute(select(Lead.id).where(Lead.source == SOURCE).limit(1))).first()
-    days = 14 if has_leads else deps.settings.permits_lookback_days
-    since = date.today() - timedelta(days=days)
+        last_ok = (
+            await session.execute(
+                select(Run.started_at)
+                .where(Run.job == run.job, Run.status == "succeeded")
+                .order_by(Run.started_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    if last_ok:
+        since = last_ok.date() - timedelta(days=OVERLAP_DAYS)
+    else:
+        since = date.today() - timedelta(days=deps.settings.permits_lookback_days)
+    run.add("since_days", (date.today() - since).days)
     source = MontrealPermitSource()
     try:
         records = await source.fetch_since(since)

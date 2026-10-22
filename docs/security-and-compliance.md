@@ -27,7 +27,8 @@ Status of each non-negotiable rule from CLAUDE.md §2: where it is enforced, or 
   (`app/redact.py`). Token limited to Issues on this repo.
 - **Suppression audit:** only the domain is logged, not the address.
 - **LLM calls:** zero data retention requested on every call (`app/llm.py`); scoring sends permit facts
-  only, never addresses or contact data.
+  only — not the address/coordinate fields or contact data. The city's public description is sent
+  as-is and can mention a civic number or business name (public record).
 
 ## Known gaps
 - Owner message text is logged in full (fine for Gate 1; review before real client data flows).

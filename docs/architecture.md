@@ -92,7 +92,7 @@ Everything from the FastAPI route onward is identical.
 | `app/suppression.py` | Do-not-email list |
 | `app/runs.py` | Run tracking, failure alerts |
 | `app/jobs/` | Job registry (`run_job`) |
-| `app/tools/` | External APIs (GitHub issues; later permits, Gmail, Calendar…) |
+| `app/tools/` | Shared external APIs used across features (GitHub issues; later Gmail, Calendar…). A source used by one feature lives with it (e.g. `app/permits/montreal.py`: client + mapping) |
 | `app/redact.py` | Strip emails/phones from outgoing technical text |
 | `app/llm.py` | The only way to call an LLM (OpenRouter) |
 | `app/scoring.py` | Lead scoring step (cheap model + rubric) |

@@ -61,8 +61,9 @@ async def test_invalid_output_retried_once_then_fails():
     result = await _llm(lambda r: next(replies)).structured("lead_scoring", "s", "u", Out)
     assert result.data.score == 50 and result.cost_usd == pytest.approx(0.0002)
 
-    with pytest.raises(LLMError, match="invalid structured output"):
+    with pytest.raises(LLMError, match="invalid structured output") as err:
         await _llm(lambda r: _reply('{"score": "high"}')).structured("lead_scoring", "s", "u", Out)
+    assert err.value.tokens == 240 and err.value.cost_usd == pytest.approx(0.0002)  # both calls billed
 
 
 async def test_server_errors_retried_client_errors_not():
