@@ -335,10 +335,14 @@ only; never `gmail.com`; a **test-mode** email, `email_sends.mode='test'`, opts 
 so a tester on the company's own domain doesn't suppress it for good); matching leads → `do_not_contact` (exact match on domain or address, never
 `LIKE`); `queued`/`held` emails to that address or domain → `cancelled` (an email already `sending`
 can't be undone here: the sender re-checks suppression right before each Gmail call, #49); outreach
-drafts involving those leads that wait for owners are closed: approval rejected by `system` with
-decision `unsubscribed`, the graph resumed (it ends, draft `cancelled`). The audit log records the
-domain only. **Races:** the leads are locked (`SELECT … FOR UPDATE`, in id order) and so is the lead
-in `queue_send`, so an owner's Approve and an unsubscribe take turns: either Approve sees the
+drafts involving those leads are closed: with an open approval it is rejected by `system` with
+decision `unsubscribed` and the graph resumed (it ends, draft `cancelled`); a `pending` draft with no
+open approval (Approve tapped but not yet queued, or between two approvals) is cancelled and
+counted, so owners are told; a draft still `drafting` is cancelled quietly, and the composing run
+leaves it closed when it finishes (`compose` only writes a draft that is still `drafting`). The audit log records the
+domain only. **Races:** the company's leads are locked (`SELECT … FOR UPDATE`, in id order) and so are **all** the
+draft's leads in `queue_send` (same order, so the two can't deadlock even when the draft's primary
+lead has the higher id), so an owner's Approve and an unsubscribe take turns: either Approve sees the
 opt-out and queues nothing, or its email row is committed first and the opt-out then cancels it.
 Owners get a WhatsApp message right away **only** if something pending was cancelled **and their 24 h
 window is open** (free-form text outside it isn't delivered by Meta; it is logged instead); otherwise

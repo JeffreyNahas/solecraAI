@@ -44,7 +44,7 @@ class Unsubscribed:
     domain: str | None = None
     leads: int = 0
     emails_cancelled: int = 0
-    drafts_closed: int = 0
+    drafts_closed: int = 0  # drafts owners were about to act on (pending, or decided but not yet queued)
     already: bool = False
     business_names: list[str] = field(default_factory=list)
     closed_approvals: list[Approval] = field(default_factory=list)
@@ -128,8 +128,7 @@ async def apply_unsubscribe(session: AsyncSession, send: EmailSend) -> Unsubscri
     result.emails_cancelled = len(cancelled.all())
 
     if lead_ids:
-        result.closed_approvals = await close_pending_drafts(session, lead_ids)
-        result.drafts_closed = len(result.closed_approvals)
+        result.closed_approvals, result.drafts_closed = await close_pending_drafts(session, lead_ids)
 
     audit(
         session,
@@ -145,9 +144,14 @@ async def apply_unsubscribe(session: AsyncSession, send: EmailSend) -> Unsubscri
     return result
 
 
-async def close_pending_drafts(session: AsyncSession, lead_ids: list[int]) -> list[Approval]:
-    """Close outreach drafts waiting for an owner that involve these leads. The approval is
-    rejected by `system` with decision `unsubscribed`; the caller resumes its graph afterwards."""
+async def close_pending_drafts(session: AsyncSession, lead_ids: list[int]) -> tuple[list[Approval], int]:
+    """Close outreach drafts that involve these leads. Returns the approvals closed (rejected by
+    `system` with decision `unsubscribed`; the caller resumes their graphs) and how many drafts
+    owners were about to act on.
+
+    A draft with no open approval is either still being written (`drafting`: cancelled quietly,
+    the graph then stays closed) or between two approvals / decided but not yet queued (`pending`:
+    cancelled and counted, so owners are told; the queueing step re-checks and queues nothing)."""
     drafts = list(
         (
             await session.execute(
@@ -159,6 +163,7 @@ async def close_pending_drafts(session: AsyncSession, lead_ids: list[int]) -> li
         ).scalars()
     )
     closed: list[Approval] = []
+    without_approval = 0
     for draft in drafts:
         open_approval = await session.scalar(
             select(Approval).where(
@@ -168,7 +173,9 @@ async def close_pending_drafts(session: AsyncSession, lead_ids: list[int]) -> li
             )
         )
         if open_approval is None:
-            draft.status = "cancelled"  # no approval yet (still drafting): nothing to resume
+            if draft.status == "pending":
+                without_approval += 1
+            draft.status = "cancelled"
             continue
         decision = {
             "action": "unsubscribed",
@@ -188,7 +195,7 @@ async def close_pending_drafts(session: AsyncSession, lead_ids: list[int]) -> li
         if won is not None:
             audit(session, ACTOR, "approval_closed_by_unsubscribe", "approval", won.id)
             closed.append(won)
-    return closed
+    return closed, len(closed) + without_approval
 
 
 async def tell_owners(deps: Deps, result: Unsubscribed, send_key: str) -> None:

@@ -370,3 +370,105 @@ async def test_unsubscribe_racing_an_approval_leaves_no_queued_email(app_with_co
             }
             assert sends[f"initial:{lead}:test"] == "cancelled"  # queued, then cancelled by the opt-out
             assert (await session.get(Lead, lead)).status == "do_not_contact"
+
+
+async def test_two_lead_draft_race_does_not_deadlock(app_with_company, monkeypatch):
+    """Review of #53: the draft's primary lead has the HIGHER id. Approve and the unsubscribe both
+    need both leads; locking them in different orders would deadlock and lose the opt-out."""
+    async with app_with_company() as (app, client):
+        sm, deps, handler = app.state.sessionmaker, app.state.deps, app.state.handler
+        deps.llm = ScriptedLLM()
+        deps.web = None
+        low = await add_lead(sm, "A", "ventes@groupehd.example", 60)  # lower id, lower score
+        primary = await add_lead(sm, "B", "info@groupehd.example", 90)  # higher id, best score → primary
+        assert primary > low
+        await outreach_draft_job(deps, RunHandle(0, "outreach_draft"), now=THURSDAY)
+        async with sm() as session:
+            approval = await session.scalar(select(Approval).where(Approval.status == "pending"))
+            draft = await session.scalar(select(EmailDraft))
+        assert draft.lead_id == primary and sorted(draft.lead_ids) == [low, primary]
+        await add_send(sm, "initial:0:live", "info@groupehd.example", status="sent", token=TOKEN)
+
+        inserted, release = asyncio.Event(), asyncio.Event()
+        real_move = outreach_email.move_leads
+
+        async def paused_move(*args, **kwargs):
+            inserted.set()
+            await release.wait()
+            return await real_move(*args, **kwargs)
+
+        monkeypatch.setattr(outreach_email, "move_leads", paused_move)
+        tap = asyncio.create_task(handler.handle(inbound(OWNER_1, button=f"approve:{approval.id}:1")))
+        await asyncio.wait_for(inserted.wait(), 10)
+        unsubscribe_request = asyncio.create_task(client.post(f"/u/{TOKEN}"))
+        await asyncio.sleep(0.5)
+        release.set()
+        results = await asyncio.wait_for(asyncio.gather(tap, unsubscribe_request), 20)  # no deadlock
+
+        assert results[1].status_code == 200
+        async with sm() as session:
+            sends = {
+                s.idempotency_key: s.status for s in (await session.execute(select(EmailSend))).scalars()
+            }
+            assert sends[f"initial:{primary}:test"] == "cancelled"
+            assert {(await session.get(Lead, i)).status for i in (low, primary)} == {"do_not_contact"}
+
+
+async def test_a_decided_but_unqueued_draft_is_counted_and_owners_are_told(app_with_company, channel):
+    """Review of #53: Approve was tapped just before the unsubscribe (decision saved, graph not
+    resumed yet). The draft is cancelled, nothing is queued, and owners are told."""
+    async with app_with_company() as (app, client):
+        sm, deps = app.state.sessionmaker, app.state.deps
+        deps.llm = ScriptedLLM()
+        deps.web = None
+        lead = await add_lead(sm, "A1", "info@groupehd.example", 90)
+        await open_windows(sm)
+        await outreach_draft_job(deps, RunHandle(0, "outreach_draft"), now=THURSDAY)
+        async with sm() as session:
+            approval = await session.scalar(select(Approval).where(Approval.status == "pending"))
+            await session.execute(
+                update(Approval)
+                .where(Approval.id == approval.id)
+                .values(status="approved", version=2, decided_by=OWNER_1)
+            )
+            await session.commit()
+        await add_send(sm, "initial:0:live", "info@groupehd.example", status="sent", token=TOKEN)
+
+        await client.post(f"/u/{TOKEN}")
+
+        async with sm() as session:
+            assert (await session.scalar(select(EmailDraft))).status == "cancelled"
+            assert await session.scalar(select(func.count()).select_from(EmailSend)) == 1
+            assert (await session.get(Lead, lead)).status == "do_not_contact"
+        assert any("1 draft(s) waiting for approval were closed" in m["body"] for m in channel.sent)
+
+
+async def test_a_draft_still_being_written_stays_closed_after_an_unsubscribe(app_with_company, monkeypatch):
+    """Review of #53: the opt-out lands while the AI is still composing. When it finishes, the draft
+    must not come back to life as `pending` and be shown to owners."""
+    async with app_with_company() as (app, client):
+        sm, deps, handler = app.state.sessionmaker, app.state.deps, app.state.handler
+        deps.llm = ScriptedLLM()
+        lead = await add_lead(sm, "A1", "info@groupehd.example", 90)
+        async with sm() as session:
+            draft = EmailDraft(lead_id=lead, lead_ids=[lead], language="fr", status="drafting")
+            session.add(draft)
+            await session.flush()
+            draft.run_id = outreach_email.run_id_for(draft.id)
+            await session.commit()
+            draft_id, run_id = draft.id, draft.run_id
+        await add_send(sm, "initial:0:live", "info@groupehd.example", status="sent", token=TOKEN)
+
+        real_compose = outreach_email.compose
+
+        async def compose_then_unsubscribe(*args, **kwargs):
+            composed = await real_compose(*args, **kwargs)
+            await client.post(f"/u/{TOKEN}")  # the prospect opts out while the AI was writing
+            return composed
+
+        monkeypatch.setattr(outreach_email, "compose", compose_then_unsubscribe)
+        await handler.start_run(outreach_email.ITEM_TYPE, run_id, {"run_id": run_id, "draft_id": draft_id})
+
+        async with sm() as session:
+            assert (await session.get(EmailDraft, draft_id)).status == "cancelled"
+            assert await session.scalar(select(func.count()).select_from(Approval)) == 0
