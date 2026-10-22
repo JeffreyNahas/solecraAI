@@ -149,6 +149,9 @@ class Lead(Base):
     score_reason: Mapped[str | None] = mapped_column(Text)  # one line from the scoring step
     # Public facts from the source record (e.g. permit type, units, issue date). No personal data.
     source_details: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # Research step record: when, model/cost, tool calls, the model's answer and the code's consent
+    # check with its evidence (page excerpt, hash, fetch time). See app/jobs/lead_research.py.
+    research_details: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     owner_assigned: Mapped[str | None] = mapped_column(String)
     # Normalized values used for dedupe (see app/leads.py).
     email_domain: Mapped[str | None] = mapped_column(String, index=True)

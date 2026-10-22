@@ -91,12 +91,14 @@ Everything from the FastAPI route onward is identical.
 | `app/leads.py` | Lead dedupe and status transitions |
 | `app/suppression.py` | Do-not-email list |
 | `app/runs.py` | Run tracking, failure alerts |
-| `app/jobs/` | Job registry (`run_job`) |
-| `app/tools/` | Shared external APIs used across features (GitHub issues; later Gmail, Calendar…). A source used by one feature lives with it (e.g. `app/permits/montreal.py`: client + mapping) |
+| `app/jobs/` | Job registry (`run_job`); `lead_research.py` (daily research job) |
+| `app/tools/` | Shared external APIs used across features (GitHub issues, `web.py` page fetcher; later Gmail, Calendar…). A source used by one feature lives with it (e.g. `app/permits/montreal.py`: client + mapping) |
 | `app/redact.py` | Strip emails/phones from outgoing technical text |
 | `app/llm.py` | The only way to call an LLM (OpenRouter) |
 | `app/scoring.py` | Lead scoring step (cheap model + rubric) |
+| `app/research.py` | Lead research step (agent loop: web search + `fetch_page`) |
+| `app/guards/` | Code checks the model can't skip (`consent.py`: CASL check of a researched contact) |
 | `app/permits/` | Permit model, filters, permits → leads pipeline |
 | `app/scheduler.py` | Scheduler process |
-| `app/skills/` | Versioned playbooks injected into LLM steps (`lead_scoring.md` v1) |
+| `app/skills/` | Versioned playbooks injected into LLM steps (`lead_scoring.md`, `lead_research.md` v1) |
 | `app/db/` | Models, session, audit helper, migrations |

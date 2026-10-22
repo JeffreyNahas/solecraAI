@@ -1,4 +1,4 @@
-"""Builds the shared services (DB, WhatsApp, GitHub reporter, LLM) for processes that run jobs:
+"""Builds the shared services (DB, WhatsApp, GitHub reporter, LLM, web fetcher) for processes that run jobs:
 the scheduler container and `scripts/run_job.py`."""
 
 from collections.abc import AsyncIterator
@@ -10,6 +10,7 @@ from app.deps import Deps
 from app.llm import LLM
 from app.owners import sync_owners
 from app.tools.github_issues import GitHubIssueReporter
+from app.tools.web import PageFetcher
 from app.whatsapp.client import WhatsAppClient
 
 
@@ -21,9 +22,11 @@ async def job_deps(settings: Settings) -> AsyncIterator[Deps]:
     wa = WhatsAppClient(settings, sessionmaker)
     issues = GitHubIssueReporter(settings.github_issues_token, settings.github_repo, sessionmaker)
     llm = LLM(settings) if settings.openrouter_api_key else None
+    web = PageFetcher()
     try:
-        yield Deps(settings, sessionmaker, wa, issues, llm)
+        yield Deps(settings, sessionmaker, wa, issues, llm, web)
     finally:
+        await web.aclose()
         await wa.aclose()
         await issues.aclose()
         if llm:

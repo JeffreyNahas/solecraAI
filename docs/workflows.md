@@ -95,6 +95,7 @@ Jobs listed but not yet registered in `app/jobs.JOBS` are skipped with a warning
 | Job | When | Status |
 |---|---|---|
 | `permits_ingest` | 06:00 daily | Montréal permits → scored leads (`app/permits/`) |
+| `lead_research` | 07:00 daily | Qualified leads → company + published contact + consent evidence (`app/jobs/lead_research.py`) |
 
 ## Permits → leads (`app/permits/`, `app/scoring.py`)
 ```
@@ -146,12 +147,81 @@ used when larger. Work type from the city label + description keywords; plain tr
 Real dry run (2026-10-22, last 30 days): 1,045 fetched → 294 kept (157 multi-residential,
 110 commercial, 21 institutional, 6 office); dropped 410 < 4 units, 295 other buildings, 46 minor work.
 
+## Lead research (`app/research.py`, `app/jobs/lead_research.py`, `app/guards/consent.py`)
+```
+new, score ≥ threshold ─► agent loop (search + fetch_page) ─► answer ─► consent check (code) ─► qualified
+                                                                   └─► no_valid_contact | do_not_contact
+```
+1. **Pick** permit leads still `new` with `score ≥ LEAD_SCORE_THRESHOLD`, highest score first,
+   at most `RESEARCH_MAX_PER_DAY` (15, decided 2026-10-22) per Montréal calendar day, and stop once
+   the day's spend reaches `RESEARCH_MAX_USD_PER_DAY` ($1.50; checked before each lead, failed
+   attempts included). Manual re-runs share both budgets (from `research_details.researched_at`
+   and `cost_usd`).
+2. **Research** (`app/research.py`): `LLM.agent` with the playbook `app/skills/lead_research.md`
+   (who: on a commercial fit-out the business named in the permit as moving in / operating (`tenant`) first, then
+   developer/owner → general contractor → property manager → architect/designer as last resort;
+   valid sources: company's own website or a public business directory, never social networks;
+   free-mail addresses allowed there). The answer includes `link_source_url`: the page tying the
+   company to the address, for owners to check at approval (null when the permit names the company).
+   Tools: OpenRouter web search (Exa, ≤ `RESEARCH_MAX_SEARCHES`) and `fetch_page`
+   (`app/tools/web.py`); ≤ `RESEARCH_MAX_TURNS` model turns; must end with a `ResearchOutcome`.
+   The permit address is sent (needed to search); page text is wrapped in `<page>` blocks,
+   angle brackets stripped, marked as untrusted data. The answer is cleaned before validation:
+   blank or placeholder values ("Unknown", "Not found", "") → null; free-text roles mapped to the
+   role list ("Entrepreneur général" → `general_contractor`, unmatched → null).
+3. **Consent check** (`app/guards/consent.py`, code only): re-fetch `source_url` and require the
+   email on the page, no "no solicitation" notice, not a social network or a search engine's page
+   (`SEARCH_ENGINE_DOMAINS`, except Google Sites: an index is not where the email was published), the business named on
+   the page (anywhere on its own site, since the model chose `website`; within ±200 characters of
+   the email on a directory, where an address that doesn't carry the business name (e.g. a
+   personal one) passes with `needs_owner_check` for the owners to confirm at approval; every
+   distinctive word of a 1–2 word name, a majority otherwise, trade words like "Rénovations" or
+   "Properties" not counted), and a company-domain email matching the website's domain.
+   `mailto:` and `[at]`/`[dot]` addresses count as published and appear in the excerpt.
+   Then the suppression list (`app/suppression.is_suppressed`). A fetch that fails for a passing
+   reason (network, timeout, 5xx, 408/429) is `retryable`: handled like an error in step 5.
+4. **Write** (version-checked, audited): passed → `new → researched → qualified` with email, phone,
+   contact, `consent_*` columns; otherwise `no_valid_contact` (or `do_not_contact` if suppressed)
+   **without the email** (Law 25: collect the minimum). Company name, website and relevance note are
+   kept either way. Everything else goes to `leads.research_details`: model, turns, searches, cost,
+   tool calls (final answer's arguments dropped), the answer without email/phone/name, the consent
+   check with evidence (final URL, fetch time, HTTP status, page title, SHA-256; the excerpt around
+   the email only for qualified leads, since it contains the address), and `same_company_lead_ids` when another lead has the same email domain (one developer,
+   several permits — drafting must send one email per company).
+5. **Errors** (model/API, or a retryable consent fetch): the lead stays `new` and is retried another
+   day; after 3 attempts → `no_valid_contact`. Consent fetch errors are counted apart
+   (`consent_fetch_errors`) and never fail the run. If every picked lead errors (or no LLM key while leads wait), the run fails
+   and owners are alerted.
+
+Run counts: `researched`, `qualified`, `not_found`, `consent_failed`, `suppressed`,
+`research_errors`, `consent_fetch_errors`, `research_conflicts`, `daily_cap_reached`, `daily_spend_cap_reached`,
+`web_searches`, `llm_tokens`,
+`llm_cost_microusd`.
+
+### Page fetcher (`app/tools/web.py`)
+The model chooses URLs, so the fetcher is the safety boundary: http(s) only; hosts resolving to
+private, loopback, link-local or reserved addresses refused (re-checked on each redirect, max 5),
+and the address actually connected to is checked again (DNS rebinding; skipped behind an HTTP
+proxy, which resolves names itself); social networks refused; 15 s per read and 30 s per page,
+2 MB cap, HTML/plain text only, charset from the header or `<meta charset>`, no cookies or
+JavaScript, identifying User-Agent. Returns text (scripts/styles removed), emails (incl. `[at]`/`(dot)` and
+`mailto:`), links and a SHA-256 of the text.
+
 ## LLM calls (`app/llm.py`)
 One client for every model call: OpenRouter chat API, model per step in `routes()` (overridable by
-settings), fallbacks via OpenRouter `models`, strict JSON-schema structured output validated by a
+settings), fallbacks via OpenRouter `models` (sent together with `model`: OpenRouter rejects a
+web-search request that names its model only in `models`), strict JSON-schema structured output validated by a
 Pydantic model (one retry with the validation error), timeouts and retries (3 tries on 408/429/5xx;
 a 429 waits until the rate-limit window resets, max 65 s), zero data retention (`provider.data_collection=deny`, `zdr=true`), usage and cost returned to the caller.
 
+`agent()` is the bounded tool loop: each turn is one model call with our function tools, a required
+`submit_answer` tool (arguments = the step's Pydantic model) and, while budget remains, OpenRouter's
+`openrouter:web_search` server tool (engine `exa`, `max_uses` = searches left). Searches are read from
+`usage.server_tool_use_details.web_search_requests`, capped at that call's `max_uses` (the count
+includes refused, unbilled searches); once the budget is spent the tool is dropped. Tool errors and invalid
+answers go back to the model as tool messages; the last turn forces `submit_answer`; no valid answer
+→ `LLMError` carrying the usage already billed. Returns data, turns, searches, cost and the tool calls.
+
 ## Planned (Phase 1)
-Research (#8), drafting and sending (#10), replies (#11),
+Drafting and sending (#10), replies (#11), Langfuse tracing (#44),
 owner chat and digest (#12) — CLAUDE.md §7.
