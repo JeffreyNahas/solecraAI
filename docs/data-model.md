@@ -63,7 +63,7 @@ Written for: owner sync, ignored non-owners, demo start, approval requested/deci
 | `approval:<id>:v<version>:ask:<phone>` | Approval request with buttons |
 | `approval:<id>:result:<phone>` | Final outcome of a demo approval |
 
-## Outreach tables (migration `0002`)
+## Outreach tables (migrations `0002`, `0003`)
 
 ### `leads`
 | Column | Notes |
@@ -71,10 +71,12 @@ Written for: owner sync, ignored non-owners, demo start, approval requested/deci
 | `id` PK | |
 | `business_name`, `contact_name`, `role`, `email`, `phone`, `address`, `website` | Contact data; collect the minimum (Law 25). `email` stored lowercase |
 | `source`, `source_ref` | Where it came from (`permit`, `owner_tip`, `google_places`, `news`, `manual`) and its id there; **unique together** |
-| `score` | Fit score (step 9) |
+| `score` | Fit score 0–100 from the scoring step (`app/scoring.py`); below `LEAD_SCORE_THRESHOLD` → `disqualified` |
 | `status` | See flow below |
 | `language` | `fr` (default) or `en` — Bill 96, French first |
 | `consent_source_url`, `consent_captured_at`, `consent_role`, `relevance_note` | CASL consent evidence (step 10) |
+| `score_reason` | One line from the scoring step (why this score) |
+| `source_details` | Public facts from the source record (permit work/building type, units, issue date, description). **No address/coordinates/personal data** — those stay in their own columns |
 | `owner_assigned` | Owner phone, optional (leads are shared) |
 | `email_domain`, `phone_normalized`, `address_normalized` | Dedupe keys, computed in `app/leads.py`, indexed |
 | `created_at`, `updated_at`, `version` | `version` +1 on every status change (optimistic locking) |

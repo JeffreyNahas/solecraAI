@@ -8,7 +8,7 @@ Status of each non-negotiable rule from CLAUDE.md §2: where it is enforced, or 
 | 2 | Least privilege (own tools, own DB role) | Planned | Separate DB roles when outreach/ERP land |
 | 3 | Estimate confidentiality + output guard | Planned | `app/guards/` (Phase 1 step 12, ERP in Phase 2) |
 | 4 | Never invent facts | Planned | Drafting prompts + output guard |
-| 5 | Untrusted input is data | Planned | Research/reply steps: structured outputs, no tool calls from content |
+| 5 | Untrusted input is data | Partly | Scoring: city description wrapped in `<permit>` tags, angle brackets stripped, structured output only, no tools. Research/replies later |
 | 6 | Owner allowlist | **Enforced** | Webhook drops non-owners before storing (`app/main.py`); handler re-checks (`app/handlers.py`) |
 | 7 | CASL | Partly | Consent evidence columns on `leads` and `suppression` table + `is_suppressed` (step 8); evidence capture (step 10), send-time checks (step 12) |
 | 8 | Bill 96, French first | Partly | Demo draft is French; `leads.language` defaults to `fr` |
@@ -26,6 +26,8 @@ Status of each non-negotiable rule from CLAUDE.md §2: where it is enforced, or 
 - **GitHub issues from agents:** technical details only; emails and phone numbers redacted
   (`app/redact.py`). Token limited to Issues on this repo.
 - **Suppression audit:** only the domain is logged, not the address.
+- **LLM calls:** zero data retention requested on every call (`app/llm.py`); scoring sends permit facts
+  only, never addresses or contact data.
 
 ## Known gaps
 - Owner message text is logged in full (fine for Gate 1; review before real client data flows).

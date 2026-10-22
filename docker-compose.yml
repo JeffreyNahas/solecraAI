@@ -35,6 +35,17 @@ services:
       timeout: 5s
       retries: 3
 
+  scheduler:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "app.scheduler"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-solecra}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-solecra}
+    depends_on:
+      api:
+        condition: service_healthy # api runs the migrations on start
+
   caddy:
     image: caddy:2
     profiles: ["prod"]

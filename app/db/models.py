@@ -146,6 +146,9 @@ class Lead(Base):
     consent_captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     consent_role: Mapped[str | None] = mapped_column(String)
     relevance_note: Mapped[str | None] = mapped_column(Text)
+    score_reason: Mapped[str | None] = mapped_column(Text)  # one line from the scoring step
+    # Public facts from the source record (e.g. permit type, units, issue date). No personal data.
+    source_details: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     owner_assigned: Mapped[str | None] = mapped_column(String)
     # Normalized values used for dedupe (see app/leads.py).
     email_domain: Mapped[str | None] = mapped_column(String, index=True)

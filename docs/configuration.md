@@ -16,7 +16,14 @@ All settings come from environment variables (`.env`, loaded by `app/config.py`)
 | `WHATSAPP_DRY_RUN` | `false` | Log instead of send |
 | `OWNER_PHONES` | — | Allowlist `phone:Name,phone:Name`, country code, digits (formatting stripped) |
 | `WEBHOOK_CAPTURE_DIR` | unset | Dev: save raw webhook bodies to build fixtures |
-| `OPENROUTER_API_KEY` | — | Phase 1 LLM calls |
+| `OPENROUTER_API_KEY` | — | All LLM calls (`app/llm.py`). Empty = scoring skipped |
+| `LLM_MODEL_SCORING` | `anthropic/claude-haiku-4.5` | Model for lead scoring (cheap, high volume) |
+| `LLM_FALLBACK_MODELS` | — | Comma-separated OpenRouter model ids tried if the main one fails |
+| `PERMITS_LOOKBACK_DAYS` | `30` | First permits pull goes back this far |
+| `PERMITS_MAX_KM` | `30` | Max distance from downtown Montréal |
+| `PERMITS_MIN_UNITS` | `4` | Min units for multi-residential permits |
+| `LEAD_SCORE_THRESHOLD` | `60` | Below this score a lead is disqualified |
+| `SCORING_MAX_PER_RUN` | `100` | Max leads scored per run (cost cap) |
 | `RUN_FAILURE_ISSUE_THRESHOLD` | `3` | Failures in a row before a GitHub issue is opened |
 | `GITHUB_ISSUES_TOKEN` | — | Fine-grained token, **Issues: read and write** on this repo only. Empty = reporter off |
 | `GITHUB_REPO` | `JeffreyNahas/solecraAI` | Where `[agent]` issues are opened |

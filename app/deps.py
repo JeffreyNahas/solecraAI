@@ -7,6 +7,7 @@ from app.channel import Channel
 from app.config import Settings
 
 if TYPE_CHECKING:
+    from app.llm import LLM
     from app.tools.github_issues import GitHubIssueReporter
 
 
@@ -18,3 +19,4 @@ class Deps:
     sessionmaker: async_sessionmaker
     channel: Channel
     issues: "GitHubIssueReporter | None" = None
+    llm: "LLM | None" = None

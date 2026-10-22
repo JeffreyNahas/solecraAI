@@ -234,6 +234,8 @@ Run the Gate 1 checklist (section 4) against the server, using
 | Restart | — | `docker compose --profile prod restart api` |
 | Deploy update | `make deploy` | `git pull && docker compose --profile prod up -d --build` |
 | Backup now | `make backup` | `./scripts/backup.sh` |
+| Scheduler logs | — | `docker compose logs -f --tail 100 scheduler` (scheduled jobs, next run times) |
+| Job history | — | `docker compose exec postgres psql -U solecra -c "select id,job,status,counts,error from runs order by id desc limit 10"` |
 | Stuck messages | — | `select message_id,status,attempts,last_error from inbound_messages where status<>'done'` |
 | Change owners | — | edit `OWNER_PHONES` in `.env`, then `docker compose --profile prod up -d api` |
 

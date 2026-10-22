@@ -109,13 +109,16 @@ Code lives at the repo root.
 │   ├── suppression.py     # do-not-email list (CASL)
 │   ├── runs.py            # run tracking, owner alerts, [agent] GitHub issues
 │   ├── jobs/              # job registry; run with scripts/run_job.py
-│   ├── llm.py             # (Phase 1) single OpenRouter client + model routing table
+│   ├── llm.py             # single OpenRouter client + model routing table
+│   ├── scoring.py         # lead scoring step (cheap model + rubric)
+│   ├── scheduler.py       # scheduler container: jobs on the Montréal timetable
+│   ├── permits/           # permit model, filters, permits → leads pipeline
 │   ├── whatsapp/          # signature check, parse, client (send_text, send_buttons), button ids
 │   ├── graphs/            # LangGraph workflows (approval_demo first, then outreach)
 │   ├── tools/             # (Phase 1) permits, search, gmail, calendar, sheets
 │   ├── guards/            # (Phase 1) output guard, CASL checks
 │   ├── db/                # models, session, audit helper, alembic migrations
-│   └── skills/            # (Phase 1) brand_voice.md, casl_checklist.md, lead_scoring.md
+│   └── skills/            # lead_scoring.md (v1); later brand_voice.md, casl_checklist.md
 ├── scripts/               # backup.sh, fake_webhook.py, check_docs.py, run_job.py
 └── tests/
     └── fixtures/          # webhook payloads (replace with real captures, see README there)
@@ -367,3 +370,7 @@ independent review (`/review-pr`) before Jeff merges. No size limit on PRs.
     systems (Postgres `runs`/`audit_log`, Langfuse, WhatsApp digest/alerts, Google Sheet), because it
     holds prospect data (Law 25) and is high volume. Only repeated agent failures reach GitHub, as
     auto-issues without personal data.
+- **2026-10-22 (permits, #7):** permit types kept = new construction, major renovation, change of use,
+  commercial fit-out, condo conversion; business-likely buildings only (multi-residential ≥ 4 units,
+  commercial, office, institutional), single-family skipped; City of Montréal open data only for now;
+  scoring with a cheap AI model (0–100, threshold 60, configurable); first pull = last 30 days.

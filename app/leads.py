@@ -123,6 +123,7 @@ class LeadIn(BaseModel):
     website: str | None = None
     language: str = "fr"
     relevance_note: str | None = None
+    source_details: dict[str, Any] | None = None
 
 
 async def find_duplicate(

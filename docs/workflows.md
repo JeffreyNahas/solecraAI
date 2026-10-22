@@ -87,6 +87,45 @@ Run one by hand: `uv run python -m scripts.run_job <name>` (server: `docker comp
 - Alerting errors are logged and never replace the job's own error.
 - Owner labels for jobs: `JOB_LABELS` in `app/runs.py`.
 
+## Scheduler (`app/scheduler.py`, container `scheduler`)
+Runs registered jobs on the timetable in `SCHEDULE` (cron, **America/Montreal**). One instance per
+job at a time; after downtime a missed slot runs once (not once per missed slot), within 1 h.
+Jobs listed but not yet registered in `app/jobs.JOBS` are skipped with a warning.
+
+| Job | When | Status |
+|---|---|---|
+| `permits_ingest` | 06:00 daily | pipeline built; registered once the Montréal client lands (#7) |
+
+## Permits → leads (`app/permits/`, `app/scoring.py`)
+```
+city permits ─► Permit (our model) ─► filters ─► insert_lead (dedupe) ─► score (cheap LLM) ─► keep | disqualify
+```
+1. **Source → `Permit`** (`app/permits/model.py`): our own categories (`WorkCategory`,
+   `BuildingCategory`), so a change in the city's format touches one mapping function.
+2. **Filters** (`app/permits/filters.py`, decided 2026-10-22): keep new construction, major
+   renovation, change of use, commercial fit-out, condo conversion; on multi-residential with
+   ≥ `PERMITS_MIN_UNITS` units, commercial, office or institutional buildings; within
+   `PERMITS_MAX_KM` of downtown (haversine; permits without coordinates are kept). Single-family
+   homes are skipped (no contact data → no CASL-compliant email).
+3. **Insert** as `source=permit`, `source_ref=<permit id>`, status `new`, language `fr`, with
+   `source_details`. Same permit or a dedupe match → counted as `duplicates`.
+4. **Score** (`app/scoring.py`): cheap model via `app/llm.py`, rubric `app/skills/lead_scoring.md`,
+   output `{score 0–100, reason}`. Only the permit's public facts are sent (no address); the city's
+   free-text description is wrapped in `<permit>` tags as data. Up to `SCORING_MAX_PER_RUN` per run,
+   including leads left unscored by an earlier failed run.
+5. **Threshold:** score < `LEAD_SCORE_THRESHOLD` → `disqualified` (audited with the score); otherwise
+   the lead stays `new`, ready for research (#8). Score writes are version-checked.
+
+Run counts: `seen`, `filtered_out` (+ `filtered_work|building|units_below_min|too_far`),
+`inserted`, `duplicates`, `scored`, `scoring_errors`, `above_threshold`, `below_threshold`,
+`llm_tokens`, `llm_cost_microusd`.
+
+## LLM calls (`app/llm.py`)
+One client for every model call: OpenRouter chat API, model per step in `routes()` (overridable by
+settings), fallbacks via OpenRouter `models`, strict JSON-schema structured output validated by a
+Pydantic model (one retry with the validation error), timeouts and retries (3 tries on 408/429/5xx),
+zero data retention (`provider.data_collection=deny`, `zdr=true`), usage and cost returned to the caller.
+
 ## Planned (Phase 1)
-Scheduler container running the jobs on the CLAUDE.md §7 timetable; outreach graphs (ingest, research,
-draft, send, replies) — CLAUDE.md §7.
+Montréal open-data client for permits (#7), research (#8), drafting and sending (#10), replies (#11),
+owner chat and digest (#12) — CLAUDE.md §7.
