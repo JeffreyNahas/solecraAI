@@ -171,9 +171,12 @@ new, score ≥ threshold ─► agent loop (search + fetch_page) ─► answer �
    role list ("Entrepreneur général" → `general_contractor`, unmatched → null).
 3. **Consent check** (`app/guards/consent.py`, code only): re-fetch `source_url` and require the
    email on the page, no "no solicitation" notice, not a social network or a search engine's page
-   (`SEARCH_ENGINE_HOSTS`: an index is not where the email was published), the business named on
+   (`SEARCH_ENGINE_DOMAINS`, except Google Sites: an index is not where the email was published), the business named on
    the page (anywhere on its own site, since the model chose `website`; within ±200 characters of
-   the email on a directory), and a company-domain email matching the website's domain.
+   the email on a directory, where the address must also carry the business name; every
+   distinctive word of a 1–2 word name, a majority otherwise, trade words like "Rénovations" or
+   "Properties" not counted), and a company-domain email matching the website's domain.
+   `mailto:` and `[at]`/`[dot]` addresses count as published and appear in the excerpt.
    Then the suppression list (`app/suppression.is_suppressed`). A fetch that fails for a passing
    reason (network, timeout, 5xx, 408/429) is `retryable`: handled like an error in step 5.
 4. **Write** (version-checked, audited): passed → `new → researched → qualified` with email, phone,

@@ -34,7 +34,9 @@ to this address, say not found.
   (development, construction, project management, purchasing, property management; for a tenant,
   the owner, president or office manager).
 - A free-mail address (Gmail, Outlook…) is fine when it is published on the company's own site or
-  on a directory listing that names the company (common for small contractors).
+  on a directory listing that names the company (common for small contractors). On a directory,
+  the address must carry the company's name (e.g. renotremblay@gmail.com for Rénovations Tremblay):
+  the code check rejects other addresses there.
 - Never construct or guess an address (no "firstname@domain" patterns). Copy it exactly as shown.
 - If the page says the company doesn't want solicitation, don't use that address.
 - `source_url` must be the exact page where the email appears, on the company's site or the

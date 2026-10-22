@@ -54,21 +54,23 @@ BLOCKED_DOMAINS = frozenset(
 
 # Search engines and their page indexes: an email seen there was not published there, so such a
 # page is never accepted as consent evidence (app/guards/consent.py). Live run 2026-10-22: the
-# model cited an exa.ai index page as the source of an address. Exact hosts (after "www."), so
-# sites hosted on e.g. sites.google.com still count as the company's own site.
-SEARCH_ENGINE_HOSTS = frozenset(
+# model cited an exa.ai index page as the source of an address. Matched with subdomains, except
+# the hosts in NOT_SEARCH_ENGINE, where small companies host their own websites.
+SEARCH_ENGINE_DOMAINS = frozenset(
     {
         "exa.ai",
         "google.com",
         "google.ca",
-        "maps.google.com",
-        "maps.google.ca",
         "bing.com",
         "duckduckgo.com",
         "search.yahoo.com",
+        "search.brave.com",
         "perplexity.ai",
+        "yandex.com",
+        "ecosia.org",
     }
 )
+NOT_SEARCH_ENGINE = frozenset({"sites.google.com"})
 _META_CHARSET_RE = re.compile(rb"""<meta[^>]+charset\s*=\s*["']?\s*([a-z0-9_\-]+)""", re.IGNORECASE)
 
 EMAIL_RE = re.compile(r"[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}", re.IGNORECASE)
@@ -106,7 +108,10 @@ class Page:
 
 
 def host_of(url: str) -> str:
-    """Lowercase host without a leading 'www.'."""
+    """Lowercase host without a leading 'www.'. A bare domain ("acme.ca/contact") counts as a URL."""
+    url = url.strip()
+    if "://" not in url:
+        url = "//" + url.lstrip("/")
     host = (urlsplit(url).hostname or "").lower().rstrip(".")
     return host[4:] if host.startswith("www.") else host
 
@@ -123,12 +128,20 @@ def is_blocked(url: str) -> bool:
 
 
 def is_search_engine(url: str) -> bool:
-    return host_of(url) in SEARCH_ENGINE_HOSTS
+    host = host_of(url)
+    if any(same_site(host, h) for h in NOT_SEARCH_ENGINE):
+        return False
+    return any(same_site(host, d) for d in SEARCH_ENGINE_DOMAINS)
+
+
+def deobfuscate(text: str) -> str:
+    """'info [at] site [dot] ca' → 'info@site.ca' (common ways sites hide addresses from bots)."""
+    return _DOT_RE.sub(".", _AT_RE.sub("@", text))
 
 
 def find_emails(text: str) -> list[str]:
     """Emails in text, including '[at]'/'(dot)' obfuscations. Lowercase, in order, no duplicates."""
-    deobfuscated = _DOT_RE.sub(".", _AT_RE.sub("@", text))
+    deobfuscated = deobfuscate(text)
     seen: dict[str, None] = {}
     for match in EMAIL_RE.findall(deobfuscated):
         email = match.lower().strip(".")
@@ -267,7 +280,11 @@ class _TextExtractor(HTMLParser):
         if tag == "a":
             href = (dict(attrs).get("href") or "").strip()
             if href.lower().startswith("mailto:"):
-                self.mailtos.append(href[7:].split("?")[0])
+                address = href[7:].split("?")[0]
+                self.mailtos.append(address)
+                # Kept in the text too, where it sits on the page: the consent evidence excerpt
+                # and the "named next to the email" check read the text.
+                self.parts.append(f" ({address}) ")
             elif href and not href.startswith(("#", "javascript:", "tel:")):
                 self._href = urljoin(self.base_url, href)
                 self._link_text = []

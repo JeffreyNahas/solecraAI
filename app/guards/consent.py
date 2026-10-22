@@ -10,7 +10,8 @@ A contact passes only if, on a fresh fetch of `source_url`:
   2. the email is published on it (text or mailto link);
   3. there is no "no solicitation" notice;
   4. the page names the business: anywhere on its own website (which the model claims, so the
-     claim is checked too), or next to the email on a directory (a listing page names many firms);
+     claim is checked too), or next to the email on a directory (a listing page names many firms),
+     where the address itself must also carry the business name;
   5. a company-domain email matches the business's website domain.
 The caller also checks the suppression list (needs the database).
 
@@ -29,6 +30,7 @@ from app.tools.web import (
     EMAIL_RE,
     PageError,
     PageFetcher,
+    deobfuscate,
     host_of,
     is_blocked,
     is_search_engine,
@@ -55,9 +57,21 @@ NO_SOLICITATION = (
     "not want to receive",
 )
 
-# Words that don't identify a business on their own.
+# Words that don't identify a business on their own: legal forms, articles and trade words
+# ("Rénovations Tremblay" and "Rénovations Express" must not match each other).
 _NAME_STOPWORDS = frozenset(
     {
+        "le",
+        "la",
+        "de",
+        "du",
+        "en",
+        "au",
+        "of",
+        "sa",
+        "sec",
+        "senc",
+        "enr",
         "inc",
         "ltee",
         "ltd",
@@ -84,6 +98,49 @@ _NAME_STOPWORDS = frozenset(
         "canada",
         "quebec",
         "montreal",
+        "renovation",
+        "renovations",
+        "reno",
+        "renos",
+        "property",
+        "properties",
+        "proprietes",
+        "development",
+        "developments",
+        "realty",
+        "real",
+        "estate",
+        "homes",
+        "home",
+        "habitation",
+        "habitations",
+        "condos",
+        "condo",
+        "immeubles",
+        "management",
+        "holdings",
+        "investments",
+        "investissements",
+        "capital",
+        "solutions",
+        "contracting",
+        "contractor",
+        "contractors",
+        "entrepreneur",
+        "entrepreneurs",
+        "entreprise",
+        "general",
+        "generale",
+        "batiment",
+        "batiments",
+        "design",
+        "interieur",
+        "interieurs",
+        "interior",
+        "interiors",
+        "architecture",
+        "architectes",
+        "architects",
     }
 )
 
@@ -104,16 +161,29 @@ def _plain(text: str) -> str:
 
 
 def name_tokens(name: str) -> list[str]:
-    return [w for w in _plain(name).replace(".", " ").split() if len(w) >= 3 and w not in _NAME_STOPWORDS]
+    return [w for w in _plain(name).replace(".", " ").split() if len(w) >= 2 and w not in _NAME_STOPWORDS]
 
 
 def names_business(page_text: str, business_name: str) -> bool:
-    """True if the page mentions the business: at least half its distinctive words (min 1)."""
+    """True if the text mentions the business: every distinctive word when it has one or two
+    ("Groupe HD" → "hd"), else a strict majority of them. Names made only of generic words must
+    appear in full."""
     tokens = name_tokens(business_name)
     if not tokens:
         return _plain(business_name) in _plain(page_text)
     words = set(_plain(page_text).replace(".", " ").split())
-    return sum(t in words for t in tokens) * 2 >= len(tokens)
+    found = sum(t in words for t in tokens)
+    return found == len(tokens) if len(tokens) <= 2 else found * 2 > len(tokens)
+
+
+def email_mentions_business(email: str, business_name: str) -> bool:
+    """True if the address itself carries the business name (a distinctive word of it, or the whole
+    name when it has none): renotremblay@gmail.com fits "Rénovations Tremblay"."""
+    compact = re.sub(r"[^a-z0-9]", "", _plain(email))
+    tokens = name_tokens(business_name)
+    if not tokens:
+        return re.sub(r"[^a-z0-9]", "", _plain(business_name)) in compact
+    return any(t in compact for t in tokens)
 
 
 def has_no_solicitation_notice(page_text: str) -> bool:
@@ -122,6 +192,7 @@ def has_no_solicitation_notice(page_text: str) -> bool:
 
 
 def _excerpt(text: str, email: str) -> str:
+    text = deobfuscate(text)  # "ventes [at] firm [dot] ca" is the published form of the address
     i = text.lower().find(email)
     if i < 0:
         return ""
@@ -163,6 +234,8 @@ async def verify_consent(
 
     if is_blocked(page.final_url):
         return fail("source redirects to a social network")
+    if is_search_engine(page.final_url):
+        return fail("source redirects to a search engine page")
     if email not in page.emails:
         return fail("email not published on the source page")
     if has_no_solicitation_notice(page.text):
@@ -180,6 +253,10 @@ async def verify_consent(
     else:
         if not names_business(evidence["excerpt"], business_name):
             return fail("business not named next to the email on the source page")
+        # A listing page shows many firms side by side and text position can't tell them apart:
+        # the address must carry the business's name (no website domain to compare it with here).
+        if not email_mentions_business(email, business_name):
+            return fail("email address does not carry the business name (directory)")
         evidence["source_type"] = "directory"
     if domain and site_host and not (same_site(domain, site_host) or same_site(site_host, domain)):
         return fail("email domain differs from the company website")

@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from app.guards.consent import has_no_solicitation_notice, names_business, verify_consent
-from app.tools.web import PageError, PageFetcher, find_emails, is_search_engine
+from app.tools.web import PageError, PageFetcher, find_emails, host_of, is_search_engine
 
 PUBLIC_IP = "151.101.1.1"
 
@@ -295,7 +295,102 @@ async def test_meta_charset_is_used_when_the_header_has_none():
     assert "Rénovations Côté" in page.text
 
 
-def test_sites_hosted_on_google_are_not_search_engines():
-    assert is_search_engine("https://www.google.com/maps/place/x")
-    assert is_search_engine("https://exa.ai/library/organization/x")
+def test_search_engines_but_not_google_sites():
+    for url in (
+        "https://www.google.com/maps/place/x",
+        "https://news.google.com/articles/x",
+        "https://exa.ai/library/organization/x",
+        "https://api.exa.ai/x",
+        "https://search.brave.com/search?q=x",
+    ):
+        assert is_search_engine(url), url
     assert not is_search_engine("https://sites.google.com/view/renos-tremblay")
+
+
+def test_host_of_accepts_bare_domains():
+    assert host_of("acme.ca") == host_of("www.acme.ca/contact") == host_of("https://acme.ca") == "acme.ca"
+
+
+# Second review of #45: the name check must not be satisfied by a shared trade word.
+@pytest.mark.parametrize(
+    ("text", "name", "expected"),
+    [
+        ("Rénovations Express renos.express@gmail.com", "Rénovations Tremblay", False),
+        ("Beta Properties — contact", "Acme Properties", False),
+        ("Groupe HD — Nous joindre", "Groupe HD", True),
+        ("Groupe ABC", "Groupe HD", False),
+        ("S3 Technologies — contact", "S3 Technologies Inc.", True),
+        ("Gestion de patrimoine ASF", "Gestion de patrimoine ASF", True),
+        ("Construction Pomerleau inc.", "Pomerleau", True),
+        ("Rénovations Générales", "Rénovations Générales Inc.", True),  # only generic words: full name
+        ("Alpha Beta Gamma Delta", "Alpha Beta Gamma Epsilon", True),  # 3 of 4: majority
+        ("Alpha Beta Zeta Eta", "Alpha Beta Gamma Epsilon", False),  # 2 of 4: not a majority
+    ],
+)
+def test_names_business(text, name, expected):
+    assert names_business(text, name) is expected
+
+
+async def test_consent_directory_neighbour_with_same_trade_word_fails():
+    page = (
+        "<h2>Rénovations Tremblay</h2><p>Rénovations résidentielles.</p>"
+        "<h2>Rénovations Express</h2><p>renos.express@gmail.com</p>"
+    )
+    result = await check(
+        {"https://annuaire.example.ca/t": page},
+        email="renos.express@gmail.com",
+        url="https://annuaire.example.ca/t",
+        website=None,
+        name="Rénovations Tremblay",
+    )
+    assert not result.ok and "does not carry the business name" in result.reason
+
+
+async def test_consent_wrong_firm_own_site_with_same_trade_word_fails():
+    result = await check(
+        {"https://beta.ca/contact": "<h1>Beta Properties</h1><p>info@beta.ca</p>"},
+        email="info@beta.ca",
+        url="https://beta.ca/contact",
+        website="https://beta.ca",
+        name="Acme Properties",
+    )
+    assert not result.ok and "does not name" in result.reason
+
+
+async def test_consent_bare_domain_website_still_checks_the_domain():
+    page = "<p>Notre client Acme Properties.</p><p>Écrivez à acme.properties@contractor.com</p>"
+    result = await check(
+        {"https://contractor.com/projets": page},
+        email="acme.properties@contractor.com",
+        url="https://contractor.com/projets",
+        website="acme.ca",
+        name="Acme Properties",
+    )
+    assert not result.ok and "domain differs" in result.reason
+
+
+async def test_consent_mailto_only_and_obfuscated_addresses_have_evidence():
+    directory = '<h2>Rénovations Tremblay</h2><p><a href="mailto:renotremblay@gmail.com">Écrire</a></p>'
+    result = await check(
+        {"https://annuaire.example.ca/t": directory},
+        email="renotremblay@gmail.com",
+        url="https://annuaire.example.ca/t",
+        website=None,
+        name="Rénovations Tremblay",
+    )
+    assert result.ok and "renotremblay@gmail.com" in result.evidence["excerpt"]
+
+    own_site = "<h1>Groupe Habitat Nord</h1><p>Ventes : ventes [at] habitatnord [dot] ca</p>"
+    result = await check({"https://habitatnord.ca/contact": own_site}, email="ventes@habitatnord.ca")
+    assert result.ok and "ventes@habitatnord.ca" in result.evidence["excerpt"]
+
+
+async def test_consent_refuses_redirect_to_search_engine():
+    pages = {
+        "https://short.example/x": httpx.Response(
+            302, headers={"location": "https://www.google.com/search?q=x"}
+        ),
+        "https://www.google.com/search?q=x": "<p>Groupe Habitat Nord info@habitatnord.ca</p>",
+    }
+    result = await check(pages, url="https://short.example/x", website=None)
+    assert not result.ok and "search engine" in result.reason
