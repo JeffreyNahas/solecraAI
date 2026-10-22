@@ -10,6 +10,7 @@
 import asyncio
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -23,6 +24,8 @@ log = logging.getLogger(__name__)
 
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 RETRY_STATUSES = {408, 429, 500, 502, 503, 504}
+# A 429 says when the per-minute window resets; wait for it, but never longer than this.
+MAX_RATE_LIMIT_WAIT = 65.0
 
 
 @dataclass(frozen=True)
@@ -139,9 +142,26 @@ class LLM:
                 last = f"HTTP {resp.status_code}: {resp.text[:300]}"
                 if resp.status_code not in RETRY_STATUSES:
                     break
+                if resp.status_code == 429 and attempt < 3:
+                    wait = _rate_limit_wait(resp)
+                    log.warning("OpenRouter rate limit; waiting %.0f s", wait)
+                    await self.sleep(wait)
+                    continue
             if attempt < 3:
                 await self.sleep(2 ** (attempt - 1))
         raise LLMError(f"OpenRouter call failed: {last}")
+
+
+def _rate_limit_wait(resp: httpx.Response) -> float:
+    """Seconds until the rate-limit window resets (`X-RateLimit-Reset`, epoch ms), else Retry-After."""
+    try:
+        if reset := resp.headers.get("x-ratelimit-reset"):
+            wait = float(reset) / 1000 - time.time() + 0.5
+        else:
+            wait = float(resp.headers.get("retry-after") or 2)
+    except ValueError:
+        wait = 2.0
+    return min(max(wait, 1.0), MAX_RATE_LIMIT_WAIT)
 
 
 def _strict_schema(schema: type[BaseModel]) -> dict[str, Any]:

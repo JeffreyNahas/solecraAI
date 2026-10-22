@@ -1,4 +1,5 @@
 import json
+import time
 
 import httpx
 import pytest
@@ -81,6 +82,28 @@ async def test_server_errors_retried_client_errors_not():
     assert len(calls) == 1
 
 
+async def test_rate_limit_waits_until_reset():
+    waits = []
+
+    async def record(seconds):
+        waits.append(seconds)
+
+    reset_ms = str(int((time.time() + 20) * 1000))
+    replies = iter(
+        [
+            httpx.Response(429, headers={"X-RateLimit-Reset": reset_ms}),
+            httpx.Response(429, headers={"X-RateLimit-Reset": str(int((time.time() + 3600) * 1000))}),
+            _reply('{"score": 3, "reason": "x"}'),
+        ]
+    )
+    http = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: next(replies)))
+    result = await LLM(_settings(), http=http, sleep=record).structured("lead_scoring", "s", "u", Out)
+    assert result.data.score == 3
+    assert 15 < waits[0] <= 21  # waits for the window to reset, not 1 s
+    assert waits[1] == 65.0  # capped
+
+
 async def test_missing_key_fails_fast():
     with pytest.raises(LLMError, match="OPENROUTER_API_KEY"):
-        await _llm(lambda r: _reply("{}"), Settings(_env_file=None)).structured("lead_scoring", "s", "u", Out)
+        no_key = Settings(_env_file=None, openrouter_api_key="")
+        await _llm(lambda r: _reply("{}"), no_key).structured("lead_scoring", "s", "u", Out)

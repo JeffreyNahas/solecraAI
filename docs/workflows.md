@@ -145,8 +145,8 @@ Real dry run (2026-10-22, last 30 days): 1,045 fetched → 294 kept (157 multi-r
 ## LLM calls (`app/llm.py`)
 One client for every model call: OpenRouter chat API, model per step in `routes()` (overridable by
 settings), fallbacks via OpenRouter `models`, strict JSON-schema structured output validated by a
-Pydantic model (one retry with the validation error), timeouts and retries (3 tries on 408/429/5xx),
-zero data retention (`provider.data_collection=deny`, `zdr=true`), usage and cost returned to the caller.
+Pydantic model (one retry with the validation error), timeouts and retries (3 tries on 408/429/5xx;
+a 429 waits until the rate-limit window resets, max 65 s), zero data retention (`provider.data_collection=deny`, `zdr=true`), usage and cost returned to the caller.
 
 ## Planned (Phase 1)
 Research (#8), drafting and sending (#10), replies (#11),
