@@ -149,6 +149,8 @@ def build_outreach_graph(deps: Deps, checkpointer: BaseCheckpointSaver):
             return await queue_send(draft, leads, decision)
         if action == "reject":
             return await close(draft, "rejected", "drafted", "disqualified", "owner_rejected", decision)
+        if action == "unsubscribed":  # the prospect opted out: the leads are already do_not_contact
+            return await close(draft, "cancelled", "drafted", "qualified", "unsubscribed", decision)
         if action == "expire":
             return await close(draft, "expired", "drafted", "qualified", "draft expired", decision)
         if action == "edited":

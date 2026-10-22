@@ -64,7 +64,9 @@ async def transition(
         )
         .values(**values)
         .returning(Approval)
-        .execution_options(synchronize_session=False)
+        # populate_existing: if the row is already loaded in this session, return the updated
+        # values, not the stale ones (the stored decision lives in the payload).
+        .execution_options(synchronize_session=False, populate_existing=True)
     )
     return result.scalar_one_or_none()
 
@@ -84,7 +86,7 @@ async def set_edit_mode(
         )
         .values(payload=Approval.payload.op("||")({"edit_mode": mode}))
         .returning(Approval)
-        .execution_options(synchronize_session=False)
+        .execution_options(synchronize_session=False, populate_existing=True)
     )
     return result.scalar_one_or_none()
 

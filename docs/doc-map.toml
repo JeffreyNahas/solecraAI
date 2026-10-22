@@ -11,7 +11,7 @@ code = ["app/db/models.py", "app/db/migrations/*", "app/db/migrations/versions/*
 
 [[map]]
 doc = "docs/workflows.md"
-code = ["app/worker.py", "app/handlers.py", "app/approvals.py", "app/graphs/*", "app/scheduler*", "app/runs.py", "app/jobs/*", "app/tools/github_issues.py", "app/llm.py", "app/scoring.py", "app/research.py", "app/permits/*", "app/skills/*", "app/tools/web.py", "app/drafting.py", "app/outreach/*"]
+code = ["app/worker.py", "app/handlers.py", "app/approvals.py", "app/graphs/*", "app/scheduler*", "app/runs.py", "app/jobs/*", "app/tools/github_issues.py", "app/llm.py", "app/scoring.py", "app/research.py", "app/permits/*", "app/skills/*", "app/tools/web.py", "app/drafting.py", "app/outreach/*", "app/unsubscribe.py"]
 
 [[map]]
 doc = "docs/whatsapp-integration.md"
