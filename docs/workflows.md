@@ -173,7 +173,8 @@ new, score ≥ threshold ─► agent loop (search + fetch_page) ─► answer �
    email on the page, no "no solicitation" notice, not a social network or a search engine's page
    (`SEARCH_ENGINE_DOMAINS`, except Google Sites: an index is not where the email was published), the business named on
    the page (anywhere on its own site, since the model chose `website`; within ±200 characters of
-   the email on a directory, where the address must also carry the business name; every
+   the email on a directory, where an address that doesn't carry the business name (e.g. a
+   personal one) passes with `needs_owner_check` for the owners to confirm at approval; every
    distinctive word of a 1–2 word name, a majority otherwise, trade words like "Rénovations" or
    "Properties" not counted), and a company-domain email matching the website's domain.
    `mailto:` and `[at]`/`[dot]` addresses count as published and appear in the excerpt.

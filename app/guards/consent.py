@@ -10,8 +10,9 @@ A contact passes only if, on a fresh fetch of `source_url`:
   2. the email is published on it (text or mailto link);
   3. there is no "no solicitation" notice;
   4. the page names the business: anywhere on its own website (which the model claims, so the
-     claim is checked too), or next to the email on a directory (a listing page names many firms),
-     where the address itself must also carry the business name;
+     claim is checked too), or next to the email on a directory (a listing page names many firms);
+     on a directory, an address that doesn't carry the business name (a personal address) passes
+     with `needs_owner_check` in the evidence;
   5. a company-domain email matches the business's website domain.
 The caller also checks the suppression list (needs the database).
 
@@ -253,11 +254,13 @@ async def verify_consent(
     else:
         if not names_business(evidence["excerpt"], business_name):
             return fail("business not named next to the email on the source page")
-        # A listing page shows many firms side by side and text position can't tell them apart:
-        # the address must carry the business's name (no website domain to compare it with here).
-        if not email_mentions_business(email, business_name):
-            return fail("email address does not carry the business name (directory)")
+        # A listing page shows many firms side by side and text position can't tell them apart.
+        # An address that doesn't carry the business's name (e.g. an owner's personal address,
+        # allowed by Jeff 2026-10-22 when no company address is published) passes, flagged so the
+        # owners confirm it from the excerpt before approving the email.
         evidence["source_type"] = "directory"
+        if not email_mentions_business(email, business_name):
+            evidence["needs_owner_check"] = True
     if domain and site_host and not (same_site(domain, site_host) or same_site(site_host, domain)):
         return fail("email domain differs from the company website")
     evidence["free_mail"] = email.rsplit("@", 1)[-1] in FREE_MAIL_DOMAINS

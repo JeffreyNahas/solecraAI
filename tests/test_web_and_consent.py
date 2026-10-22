@@ -331,7 +331,9 @@ def test_names_business(text, name, expected):
     assert names_business(text, name) is expected
 
 
-async def test_consent_directory_neighbour_with_same_trade_word_fails():
+async def test_consent_directory_address_without_business_name_is_flagged():
+    """Personal addresses are allowed on directories (Jeff, 2026-10-22), but a listing page can't
+    tell neighbouring firms apart, so the owners confirm these from the excerpt."""
     page = (
         "<h2>Rénovations Tremblay</h2><p>Rénovations résidentielles.</p>"
         "<h2>Rénovations Express</h2><p>renos.express@gmail.com</p>"
@@ -343,7 +345,17 @@ async def test_consent_directory_neighbour_with_same_trade_word_fails():
         website=None,
         name="Rénovations Tremblay",
     )
-    assert not result.ok and "does not carry the business name" in result.reason
+    assert result.ok and result.evidence["needs_owner_check"] is True
+    assert "Rénovations Express" in result.evidence["excerpt"]  # what the owner will see
+
+    named = await check(
+        {"https://annuaire.example.ca/r": "<h2>Rénovations Tremblay</h2><p>renotremblay@gmail.com</p>"},
+        email="renotremblay@gmail.com",
+        url="https://annuaire.example.ca/r",
+        website=None,
+        name="Rénovations Tremblay",
+    )
+    assert named.ok and "needs_owner_check" not in named.evidence
 
 
 async def test_consent_wrong_firm_own_site_with_same_trade_word_fails():

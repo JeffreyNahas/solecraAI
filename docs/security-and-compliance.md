@@ -38,6 +38,9 @@ Status of each non-negotiable rule from CLAUDE.md §2: where it is enforced, or 
   address + project facts, public record) go to Exa through OpenRouter.
 
 ## Known gaps
+- On a directory page, an address that doesn't carry the business name (allowed: personal
+  addresses) can't be told apart from a neighbouring listing's by code. Such leads carry
+  `needs_owner_check`; the approval step (#10) must show the flag and the excerpt to the owners.
 - Behind an HTTP proxy (dev sandboxes only) the connected-address check is skipped: the proxy
   resolves names itself. The production server uses no proxy.
 - Sites that hide emails with Cloudflare's anti-scraping encoding fail the consent check (decoding
