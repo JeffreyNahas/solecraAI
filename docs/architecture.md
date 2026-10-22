@@ -54,6 +54,8 @@ Outgoing messages are ordinary HTTPS calls from `api` to
 | GET | `/health` | Runs `SELECT 1`; used by Docker healthcheck and the uptime monitor |
 | GET | `/webhook` | Meta's one-time verification (`hub.mode`, `hub.verify_token`, `hub.challenge`) |
 | POST | `/webhook` | All WhatsApp events |
+| GET | `/u/{token}` | Unsubscribe confirm page (bilingual, one button). Never unsubscribes. Public: this is the link in every outreach email |
+| POST | `/u/{token}` | Applies the unsubscribe (Confirm button, and the one-click POST from mail providers). Unknown token → generic page |
 
 ## Startup sequence (`create_app` lifespan)
 
@@ -97,6 +99,7 @@ Everything from the FastAPI route onward is identical.
 | `app/runs.py` | Run tracking, failure alerts |
 | `app/jobs/` | Job registry (`run_job`); `lead_research.py`, `outreach_draft.py` (daily jobs). `runtime.job_deps` also opens a LangGraph Postgres checkpointer for jobs that run graphs |
 | `app/drafting.py` | Outreach drafting step (model + guard + retry), owner-text parsing |
+| `app/unsubscribe.py` | Opt-out of outreach emails: `apply_unsubscribe` (one transaction), the page HTML |
 | `app/outreach/` | `render.py` (final email + CASL footer), `present.py` (drafts on WhatsApp), `calendar.py` (Québec business days) |
 | `app/tools/` | Shared external APIs used across features (GitHub issues, `web.py` page fetcher; later Gmail, Calendar…). A source used by one feature lives with it (e.g. `app/permits/montreal.py`: client + mapping) |
 | `app/redact.py` | Strip emails/phones from outgoing technical text |

@@ -16,14 +16,15 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import PlainTextResponse
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, Response
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 from sqlalchemy import text, update
 from sqlalchemy.dialects.postgresql import insert
 
+from app import unsubscribe
 from app.channel import Channel
 from app.config import Settings, get_settings
 from app.db.audit import audit
@@ -102,6 +103,8 @@ def create_app(settings: Settings | None = None, channel: Channel | None = None)
         worker = Worker(sessionmaker, handler, settings.worker_poll_seconds, settings.worker_max_attempts)
 
         app.state.settings = settings
+        app.state.deps = deps
+        app.state.handler = handler
         app.state.sessionmaker = sessionmaker
         app.state.worker = worker
         app.state.owners = set(settings.owners())
@@ -161,7 +164,41 @@ def create_app(settings: Settings | None = None, channel: Channel | None = None)
         # Any DB error above raises -> 500 -> Meta retries later (dedupe makes that safe).
         return Response(status_code=200)
 
+    @app.get("/u/{token}", response_class=HTMLResponse)
+    async def unsubscribe_page(token: str) -> HTMLResponse:
+        """Confirm page. Never unsubscribes: mail scanners and previews open every link."""
+        return HTMLResponse(unsubscribe.confirm_page(settings, token), headers=unsubscribe.page_headers())
+
+    @app.post("/u/{token}", response_class=HTMLResponse)
+    async def unsubscribe_confirm(token: str, request: Request, background: BackgroundTasks) -> HTMLResponse:
+        """The Confirm button, and the one-click POST from mail providers (RFC 8058)."""
+        state = request.app.state
+        async with state.sessionmaker() as session:
+            send = await unsubscribe.find_send(session, token)
+            if send is None:
+                return HTMLResponse(
+                    unsubscribe.done_page(settings, known=False), headers=unsubscribe.page_headers()
+                )
+            result = await unsubscribe.apply_unsubscribe(session, send)
+            send_key = send.idempotency_key
+            await session.commit()
+        # The opt-out is committed; the rest happens after the answer so a slow graph run or
+        # WhatsApp call never makes the prospect (or a mail provider) wait. A crash here is
+        # covered by resume_unfinished at the next start.
+        background.add_task(_after_unsubscribe, state, result, send_key)
+        log.info("unsubscribed: domain=%s leads=%d", result.domain or "(free-mail)", result.leads)
+        return HTMLResponse(unsubscribe.done_page(settings, known=True), headers=unsubscribe.page_headers())
+
     return app
+
+
+async def _after_unsubscribe(state: Any, result: unsubscribe.Unsubscribed, send_key: str) -> None:
+    for approval in result.closed_approvals:  # resume the closed drafts' graphs (they end)
+        try:
+            await state.handler.deliver_decision(approval)
+        except Exception:
+            log.exception("could not close draft run for approval %s", approval.id)
+    await unsubscribe.tell_owners(state.deps, result, send_key)
 
 
 async def _store(app: FastAPI, messages: list) -> int:

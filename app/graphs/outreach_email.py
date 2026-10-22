@@ -109,6 +109,8 @@ def build_outreach_graph(deps: Deps, checkpointer: BaseCheckpointSaver):
         composed = await compose(deps.llm, leads, draft.language, context_for(deps, draft, leads))
         async with deps.sessionmaker() as session:
             row = await session.get(EmailDraft, draft.id)
+            if row.status != "drafting":  # closed meanwhile (e.g. the prospect unsubscribed): stay closed
+                return {"next": "end"}
             row.subject, row.body = composed.subject, composed.body
             row.author, row.guard, row.llm = "ai", composed.guard.as_dict(), llm_record(composed)
             if composed.guard.ok:
@@ -149,6 +151,8 @@ def build_outreach_graph(deps: Deps, checkpointer: BaseCheckpointSaver):
             return await queue_send(draft, leads, decision)
         if action == "reject":
             return await close(draft, "rejected", "drafted", "disqualified", "owner_rejected", decision)
+        if action == "unsubscribed":  # the prospect opted out: the leads are already do_not_contact
+            return await close(draft, "cancelled", "drafted", "qualified", "unsubscribed", decision)
         if action == "expire":
             return await close(draft, "expired", "drafted", "qualified", "draft expired", decision)
         if action == "edited":
@@ -195,15 +199,26 @@ def build_outreach_graph(deps: Deps, checkpointer: BaseCheckpointSaver):
         held = mode == "test" and intended not in settings.test_recipients()
         async with deps.sessionmaker() as session:
             # Unsubscribed or closed since the draft was made (up to 2 business days)? Then no email.
-            current = await session.get(Lead, primary.id)
+            # Lock ALL the draft's leads first, in id order (the unsubscribe locks the company's leads
+            # in the same order, so the two can't deadlock): an unsubscribe applying right now
+            # finishes before we look, or waits until our email row is committed and cancels it.
+            locked = {
+                lead.id: lead
+                for lead in (
+                    await session.execute(
+                        select(Lead)
+                        .where(Lead.id.in_(draft.lead_ids))
+                        .order_by(Lead.id)
+                        .with_for_update()
+                        .execution_options(populate_existing=True)
+                    )
+                ).scalars()
+            }
+            current = locked.get(primary.id)
             blocked = (
-                await is_suppressed(session, intended)
-                or current is None
-                or current.status
-                not in (
-                    "drafted",
-                    "approved",
-                )
+                current is None
+                or current.status not in ("drafted", "approved")
+                or await is_suppressed(session, intended)
             )
             already = await session.get(EmailSend, key)
             if blocked and already is None:

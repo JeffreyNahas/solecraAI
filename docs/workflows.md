@@ -318,6 +318,40 @@ is editing; an approval whose draft is no longer pending is skipped (logged), ne
 **Show drafts** button and on the `drafts` command. Morning: `drafts_ready` template for an owner
 whose window is closed, else a text. Message keys include approval id + version: never repeated.
 
+## Unsubscribe (`app/unsubscribe.py`, routes in `app/main.py`)
+Every outreach email links to `<PUBLIC_BASE_URL>/u/<token>` (token = `email_sends.unsubscribe_token`,
+128 bits, no personal data; the row is kept ≥ 60 days so the link keeps working, CASL) and carries
+`List-Unsubscribe` + `List-Unsubscribe-Post: List-Unsubscribe=One-Click` headers (RFC 8058).
+
+| Request | What happens |
+|---|---|
+| `GET /u/<token>` | Page with one Confirm button, French first then English. **Never unsubscribes**: corporate mail scanners and previews open every link |
+| `POST /u/<token>` | Applies the opt-out. Same URL the mail provider POSTs for one-click |
+| Unknown / expired token | Same kind of page with Solecra's contact email; nothing changes, nothing is revealed |
+
+`apply_unsubscribe` runs in **one transaction** (a crash can't leave it half applied; repeating it is
+harmless): suppress the address and, for a company address, the whole domain (free-mail: the address
+only; never `gmail.com`; a **test-mode** email, `email_sends.mode='test'`, opts out the address only,
+so a tester on the company's own domain doesn't suppress it for good); matching leads → `do_not_contact` (exact match on domain or address, never
+`LIKE`); `queued`/`held` emails to that address or domain → `cancelled` (an email already `sending`
+can't be undone here: the sender re-checks suppression right before each Gmail call, #49); outreach
+drafts involving those leads are closed: with an open approval it is rejected by `system` with
+decision `unsubscribed` and the graph resumed (it ends, draft `cancelled`); a `pending` draft with no
+open approval (Approve tapped but not yet queued, or between two approvals) is cancelled and
+counted, so owners are told; a draft still `drafting` is cancelled quietly, and the composing run
+leaves it closed when it finishes (`compose` only writes a draft that is still `drafting`). The audit log records the
+domain only. **Races:** the company's leads are locked (`SELECT … FOR UPDATE`, in id order) and so are **all** the
+draft's leads in `queue_send` (same order, so the two can't deadlock even when the draft's primary
+lead has the higher id), so an owner's Approve and an unsubscribe take turns: either Approve sees the
+opt-out and queues nothing, or its email row is committed first and the opt-out then cancels it.
+Owners get a WhatsApp message right away **only** if something pending was cancelled **and their 24 h
+window is open** (free-form text outside it isn't delivered by Meta; it is logged instead); otherwise
+it shows in the daily digest later (#12). The resume of closed drafts and the owner messages run
+**after** the page is returned (a slow graph run or WhatsApp call never makes a mail provider wait;
+`resume_unfinished` covers a crash). A button tapped on a draft the system closed answers
+"Closed: the prospect unsubscribed." (or "nobody decided in time"). Any later lead of that company is moved to
+`do_not_contact` by the 08:00 job (suppression is checked first).
+
 ## Output guard (`app/guards/output.py`)
 `check_body(subject, body, ctx)` on every AI or owner text, `check_rendered` on the final email:
 
@@ -337,5 +371,5 @@ The final email must carry every identity field, the unsubscribe link and the Li
 headers; otherwise nothing is queued (the run fails and alerts).
 
 ## Planned (Phase 1)
-Unsubscribe page (#48), Gmail sending (#49), replies (#11), Langfuse tracing (#44),
+Gmail sending (#49), replies (#11), Langfuse tracing (#44),
 owner chat and digest (#12) — CLAUDE.md §7.
