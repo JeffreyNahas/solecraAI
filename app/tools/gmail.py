@@ -135,9 +135,12 @@ class GmailClient:
             )
         if response.status_code != 200:
             raise NotSent(f"Google sign-in failed (HTTP {response.status_code})")
-        data = response.json()
-        self._token = data["access_token"]
-        self._token_expires = time.monotonic() + float(data.get("expires_in", 300))
+        try:
+            data = response.json()
+            self._token = data["access_token"]
+            self._token_expires = time.monotonic() + float(data.get("expires_in", 300))
+        except (ValueError, KeyError, TypeError) as exc:
+            raise NotSent("Google sign-in answered with something unreadable") from exc
         return self._token
 
     async def send(
@@ -155,18 +158,21 @@ class GmailClient:
         if not self.configured:
             raise AuthProblem("Gmail is not connected: GMAIL_* settings are empty")
         s = self.settings
-        msg = build_message(
-            from_name=f"{s.company_sender_name}, {s.company_name}"
-            if s.company_sender_name
-            else s.company_name,
-            from_address=s.gmail_sender,
-            to=recipient,
-            subject=subject,
-            text=text,
-            message_id=message_id,
-            headers=headers,
-        )
-        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        try:
+            msg = build_message(
+                from_name=f"{s.company_sender_name}, {s.company_name}"
+                if s.company_sender_name
+                else s.company_name,
+                from_address=s.gmail_sender,
+                to=recipient,
+                subject=subject,
+                text=text,
+                message_id=message_id,
+                headers=headers,
+            )
+            raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        except (ValueError, UnicodeError) as exc:  # e.g. a newline in a header: can never be built
+            raise Rejected(f"the email could not be built: {type(exc).__name__}") from exc
 
         for attempt in (1, 2):
             token = await self._access_token(force=attempt == 2)
@@ -181,8 +187,11 @@ class GmailClient:
 
             status = response.status_code
             if status == 200:
-                data = response.json()
-                return SentMessage(message_id=data["id"], thread_id=data["threadId"])
+                try:
+                    data = response.json()
+                    return SentMessage(message_id=data["id"], thread_id=data["threadId"])
+                except (ValueError, KeyError, TypeError) as exc:  # Gmail accepted it but we can't read how
+                    raise Ambiguous("Gmail accepted the email but its answer was unreadable") from exc
             if status == 401 and attempt == 1:
                 continue  # expired access token: refresh once and retry (not sent)
             raise self._classify(status, response)

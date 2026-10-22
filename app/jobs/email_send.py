@@ -29,6 +29,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 
+from app.channel import ChannelError
 from app.config import Settings
 from app.db.audit import audit
 from app.db.models import EmailDraft, EmailSend, Lead, Touch
@@ -37,7 +38,9 @@ from app.graphs.outreach_email import move_leads
 from app.guards.output import check_rendered
 from app.outreach.calendar import is_business_day
 from app.outreach.golive import live_problems
+from app.outreach.present import window_open
 from app.outreach.render import Identity, content_hash
+from app.owners import active_owners
 from app.runs import RunHandle
 from app.settings_store import (
     EMAIL_NEXT_SEND_AT,
@@ -114,6 +117,7 @@ async def mark_stuck(deps: Deps, run: RunHandle) -> list[str]:
                 )
             ).scalars()
         )
+        keys = [row.idempotency_key for row in stuck]
         for row in stuck:
             row.status = "unknown"
             row.error = "interrupted while sending; check the Sent folder to see if it left"
@@ -121,6 +125,7 @@ async def mark_stuck(deps: Deps, run: RunHandle) -> list[str]:
         await session.commit()
     if stuck:
         run.add("marked_unknown", len(stuck))
+        await alert_unknown(deps, run, keys)
     return (
         [f"{len(stuck)} email(s) may or may not have been sent (interrupted); check Gmail Sent"]
         if stuck
@@ -332,7 +337,49 @@ async def handle_failure(
         audit(session, ACTOR, f"send_{status}", "email_send", claimed.key, reason=reason)
         await session.commit()
     log.warning("email %s -> %s: %s", claimed.key, status, reason)
+    if status == "unknown":
+        await alert_unknown(deps, run, [claimed.key])
     return problem
+
+
+async def alert_unknown(deps: Deps, run: RunHandle, keys: list[str]) -> None:
+    """An email that may or may not have left needs a person, whatever the run's failure streak:
+    tell the owners now (business name only) and make sure Jeff hears too (one GitHub issue)."""
+    async with deps.sessionmaker() as session:
+        names = list(
+            (
+                await session.execute(
+                    select(func.coalesce(Lead.business_name, "a prospect"))
+                    .join(EmailSend, EmailSend.lead_id == Lead.id)
+                    .where(EmailSend.idempotency_key.in_(keys))
+                )
+            ).scalars()
+        )
+        owners = await active_owners(session)
+    text = (
+        f"⚠️ An email to {', '.join(names) or 'a prospect'} may or may not have left (Gmail gave no clear "
+        "answer). It will NOT be sent again by itself. Please check the Sent folder of the sending Gmail "
+        "and tell Jeff what you see."
+    )
+    for owner in owners:
+        if not window_open(owner):  # free-form text isn't delivered outside the 24 h window
+            log.warning("owner %s not told of an unknown send: 24 h window closed", owner.name)
+            continue
+        try:
+            await deps.channel.send_text(owner.phone, text, key=f"email_unknown:{keys[0]}:{owner.phone}")
+        except ChannelError:
+            log.exception("could not tell %s about an unknown send", owner.phone)
+    if deps.issues:
+        try:
+            await deps.issues.report_failure(
+                job="email_send",
+                run_id=run.id,
+                error=f"{len(keys)} email(s) in state unknown (maybe sent): {', '.join(keys)}",
+                streak=1,
+                when=datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
+            )
+        except Exception:
+            log.exception("could not open the GitHub issue for an unknown send")
 
 
 def gap(settings: Settings) -> timedelta:

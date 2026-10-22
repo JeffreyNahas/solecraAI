@@ -378,12 +378,12 @@ Gmail outcome (`app/tools/gmail.py` classifies; **one call per claim**):
 |---|---|---|
 | 200 | `sent` + Gmail ids; a `touch` (out/initial, thread id); leads `approved → sent`; next send time set | — |
 | Could not connect, 429 / rate limit, token endpoint down | back to `queued` (attempts +1); `failed` after 3 | retried on a later tick |
-| Timeout after connecting, 5xx, dropped connection | `unknown`, **never retried** | job fails → owners alerted; check Gmail *Sent* |
+| Timeout after connecting, 5xx, dropped connection | `unknown`, **never retried** | owners get a dedicated WhatsApp message (business name only; only if their 24 h window is open) and one GitHub issue is opened/updated at once, whatever the failure streak; check Gmail *Sent* |
 | 400 / other 4xx from Gmail | `failed` | job fails |
 | `invalid_grant`, 401 twice, 403 permission | stays `queued` (attempt not counted) | job fails: Jeff reconnects (`scripts/gmail_auth.py`) |
 | Recipient not in `EMAIL_TEST_RECIPIENTS` (test mode) | `held` | job fails |
 
-A row left `sending` for over 10 minutes (the process died around the call) becomes `unknown`. An
+A row left `sending` for over 10 minutes (the process died around the call) becomes `unknown` and gets the same alert. An email that cannot be built (e.g. a newline in a header) is refused (`failed`) before any network call. An
 `unknown` email never sends again by itself; its lead stays `approved`. Problem messages contain no addresses.
 The Gmail credentials (`GMAIL_*`, file `.env.gmail`) exist only in the scheduler container: the API's `Deps.gmail` is `None`.
 

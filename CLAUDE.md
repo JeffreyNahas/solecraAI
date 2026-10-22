@@ -367,6 +367,9 @@ independent review (`/review-pr`) before Jeff merges. No size limit on PRs.
 - **`UPDATE … RETURNING <Model>` returns the old values if the row is already loaded** in the session.
   Use `execution_options(populate_existing=True)` (found when an unsubscribe closed a draft whose
   approval had been read first: the returned approval had no decision).
+- **A generic failure alert says "will try again"; a doubtful send must not.** The run tracker only
+  messages on the first failure of a streak and calls the next quiet run "working again" (review of #54).
+  Anything that needs a person (an email that may have left) gets its own message and issue.
 - **Owners are processed in parallel.** Tests (and code) must not assume an order between messages
   from different owners.
 

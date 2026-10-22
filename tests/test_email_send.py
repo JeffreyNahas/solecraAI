@@ -432,6 +432,65 @@ async def test_doubtful_failures_are_never_retried(env, failure):
     assert len(google.sends) == 1  # the same email is never offered to Gmail again
 
 
+async def test_owners_are_told_what_to_do_when_an_email_may_have_left(env):
+    """Review of #54: the generic 'will try again' alert is wrong for a doubtful send."""
+    from app.owners import sync_owners
+    from tests.helpers import OWNER_1
+
+    deps, google, sm = env
+    await sync_owners(sm, deps.settings.owners())
+    async with sm() as session:  # Alice wrote recently (window open); Bob didn't
+        from app.db.models import Owner
+
+        await session.execute(
+            update(Owner).where(Owner.phone == OWNER_1).values(last_inbound_at=datetime.now(UTC))
+        )
+        await session.commit()
+    reported = []
+
+    class Issues:
+        async def report_failure(self, **kwargs):
+            reported.append(kwargs)
+
+    deps.issues = Issues()
+    key = await queue(sm, deps.settings)
+    google.script = [error(503)]
+    await run(deps, expect_error="may or may not")
+    texts = [m["body"] for m in deps.channel.sent if m["to"] == OWNER_1]
+    assert len(texts) == 1 and "may or may not have left" in texts[0] and "Sent folder" in texts[0]
+    assert "@" not in texts[0] and key not in texts[0]
+    assert len(reported) == 1 and key in reported[0]["error"] and "@" not in reported[0]["error"]
+
+    # A crash leaves the same kind of doubt: same message.
+    key2 = await queue(sm, deps.settings, "b", to="autre@groupehd.example")
+    async with sm() as session:
+        await session.execute(
+            update(EmailSend).where(EmailSend.idempotency_key == key2).values(status="sending")
+        )
+        await session.execute(
+            update(EmailSend)
+            .where(EmailSend.idempotency_key == key2)
+            .values(updated_at=datetime.now(UTC) - timedelta(minutes=11))
+        )
+        await session.commit()
+    await run(deps, THURSDAY_10 + timedelta(hours=1), expect_error="interrupted")
+    assert len([m for m in deps.channel.sent if m["to"] == OWNER_1]) == 2 and len(reported) == 2
+
+
+async def test_an_email_that_cannot_be_built_is_refused_not_left_sending(env):
+    deps, google, sm = env
+    key = await queue(sm, deps.settings)
+    async with sm() as session:
+        from app.outreach.render import content_hash
+
+        sent = await session.get(EmailSend, key)
+        sent.subject = "Bonjour\r\nBcc: x@example.com"
+        sent.content_sha256 = content_hash(sent.subject, sent.rendered_text)
+        await session.commit()
+    await run(deps, expect_error="refused an email")
+    assert (await row(sm, key)).status == "failed" and google.sends == []
+
+
 async def test_gmail_refusing_the_email_is_final(env):
     deps, google, sm = env
     key = await queue(sm, deps.settings)
