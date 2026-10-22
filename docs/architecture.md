@@ -61,6 +61,8 @@ Outgoing messages are ordinary HTTPS calls from `api` to
 2. Sync the `owners` table from `OWNER_PHONES`.
 3. Open a psycopg pool and set up LangGraph's `AsyncPostgresSaver` (creates checkpoint tables).
 4. Build the WhatsApp client (or use an injected channel in tests), the graphs and the handler.
+   Graphs are registered by the approval `item_type` they own (`{item_type: GraphEntry(graph)}`),
+   so a button tap or an edit is routed to the right graph.
 5. Start the worker: reset messages stuck in `processing`, resume approvals that were decided
    but never delivered to their graph, then start the processing loop.
 

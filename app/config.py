@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     research_max_turns: int = Field(default=8, ge=2)
     research_max_searches: int = Field(default=4, ge=0)
     research_max_usd_per_day: float = Field(default=1.5, gt=0)  # LLM + search spend, Montréal day
+    outreach_daily_cap: int = Field(default=15, ge=0)  # new outreach emails/day (owners can change it)
 
     # Run tracking: after this many failures in a row, open/update a GitHub issue.
     run_failure_issue_threshold: int = Field(default=3, ge=1)

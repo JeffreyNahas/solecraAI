@@ -130,7 +130,7 @@ async def test_edit_uses_replacement_text(running_app, channel):
         final = await get_approval(app, approval.id)
 
     assert final.status == "edited" and final.payload["decision"]["text"] == "Bonjour, nouveau texte."
-    assert "Already handled by Alice (editing)." in bodies(channel, OWNER_2)
+    assert "Alice is editing this draft." in bodies(channel, OWNER_2)
     assert any("Final text:\n\nBonjour, nouveau texte." in b for b in bodies(channel, OWNER_2))
 
 

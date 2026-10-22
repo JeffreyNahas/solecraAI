@@ -7,7 +7,7 @@ code = ["app/main.py", "app/deps.py", "app/scheduler.py", "docker-compose.yml", 
 
 [[map]]
 doc = "docs/data-model.md"
-code = ["app/db/models.py", "app/db/migrations/*", "app/db/migrations/versions/*", "app/leads.py", "app/suppression.py"]
+code = ["app/db/models.py", "app/db/migrations/*", "app/db/migrations/versions/*", "app/leads.py", "app/suppression.py", "app/settings_store.py"]
 
 [[map]]
 doc = "docs/workflows.md"

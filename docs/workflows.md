@@ -18,7 +18,8 @@ Processes `inbound_messages` after the webhook has stored them.
 
 ```
 button tap  → parse "<action>:<approval_id>:<version>" → approval transition (below)
-text        → owner owes replacement text for an Edit?  → finish the edit
+            → edit_text / edit_ai                     → record how this owner will edit
+text        → owner owes an edit?                     → finish the edit
             → "test draft"                            → start approval_demo
             → "help" / "aide" / "?"                   → command list
             → anything else                           → "Echo: <text>"   (Gate 1 test mode)
@@ -37,6 +38,13 @@ other types → "I can only read text messages for now."
                                    └──────────┘
 ```
 
+Graphs are registered by approval `item_type` (`Handler.graphs`, a `GraphEntry` each). For items the
+AI can revise (`ai_edits=True`), Edit answers with two buttons, **My own text** (`edit_text`) and
+**Tell AI changes** (`edit_ai`); the choice is stored as `payload.edit_mode` (only for the owner who
+tapped Edit, same version), and text typed before choosing re-asks the choice. The edit decision is
+`{action: edited, mode: text|ai, text, approval_id, by, by_name}`. Another owner tapping while it's
+being edited gets `<name> is editing this draft.`
+
 Every transition is one SQL statement:
 `UPDATE approvals SET status=…, version=version+1 … WHERE id=:id AND status=:expected AND version=:v`.
 Only one tap can match, so **the first owner wins**. A losing tap gets
@@ -46,7 +54,10 @@ the graph instead.
 
 After a winning Approve/Reject (or the edit text), the handler resumes the graph:
 `graph.ainvoke(Command(resume=decision), {"configurable": {"thread_id": run_id}})`, then sets
-`resumed_at`.
+`resumed_at`. **Only if the graph's saved state is paused in an `interrupt()` whose value has this
+`approval_id`** (`graph.aget_state`). Otherwise (thread finished, missing, or waiting on a newer
+approval after an edit loop) the decision is only marked delivered: resuming a missing thread would
+restart the graph from the beginning, and an old decision must never answer a newer approval.
 
 ## Graph: `approval_demo` (`app/graphs/approval_demo.py`)
 

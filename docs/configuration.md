@@ -28,6 +28,7 @@ All settings come from environment variables (`.env`, loaded by `app/config.py`)
 | `RESEARCH_MAX_PER_DAY` | `15` | Leads researched per Montréal day (≈ $0.08 each, live 2026-10-22) |
 | `RESEARCH_MAX_TURNS` | `8` | Model turns per lead in the research loop |
 | `RESEARCH_MAX_SEARCHES` | `4` | Web searches per lead (Exa via OpenRouter, ≈ $0.007 each) |
+| `OUTREACH_DAILY_CAP` | `15` | New outreach emails per day (default; owners can change it at runtime: `settings.outreach_daily_cap`) |
 | `RESEARCH_MAX_USD_PER_DAY` | `1.5` | Safety stop: research model + search spend per Montréal day (USD), checked before each lead |
 | `RUN_FAILURE_ISSUE_THRESHOLD` | `3` | Failures in a row before a GitHub issue is opened |
 | `GITHUB_ISSUES_TOKEN` | — | Fine-grained token, **Issues: read and write** on this repo only. Empty = reporter off |
