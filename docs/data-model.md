@@ -141,7 +141,7 @@ called before every send. Entries are never removed by code. The audit log recor
 | `agent_issue:<job>` | `{"number": N}` — GitHub issue opened for that job's repeated failures |
 | `outreach_paused` | `true` stops drafting and sending (`app/settings_store.py`) |
 | `outreach_daily_cap` | New outreach emails per day; falls back to `OUTREACH_DAILY_CAP` |
-| `email_next_send_at` | ISO time: no outreach email before it (random spacing) |
+| `email_next_send_at` | ISO time: no outreach email before it (random spacing); read back as UTC if stored without an offset |
 
 Runtime settings are read and written with `app/settings_store.py`; every write is audited
 (`setting_changed`).

@@ -5,6 +5,7 @@ check, LangGraph restarts a missing thread from START and an edit loop could han
 to a newer approval.
 """
 
+import asyncio
 import uuid
 from typing import Any, TypedDict
 
@@ -15,7 +16,7 @@ from langgraph.types import interrupt
 from sqlalchemy import func, select
 
 from app import approvals
-from app.db.models import Approval, InboundMessage
+from app.db.models import Approval, AuditLog, InboundMessage
 from app.db.session import make_engine, make_sessionmaker
 from app.deps import Deps
 from app.handlers import GraphEntry, Handler
@@ -32,9 +33,16 @@ class LoopState(TypedDict, total=False):
     rounds: int
 
 
-def build_loop_graph(deps: Deps, checkpointer, starts: list[str], crash: list[bool] | None = None):
+def build_loop_graph(
+    deps: Deps,
+    checkpointer,
+    starts: list[str],
+    crash: list[bool] | None = None,
+    gate: list[asyncio.Event | None] | None = None,
+):
     """ask → wait → (edited: ask again with a NEW approval) → done. Records every start.
-    `crash=[True]` makes the next re-ask raise once (a container restart mid-step)."""
+    `crash=[True]` makes the next re-ask raise once (a container restart mid-step).
+    `gate=[event]` makes ask wait for the event after saving the approval (a slow WhatsApp send)."""
 
     async def ask(state: LoopState) -> LoopState:
         if not state.get("rounds"):
@@ -45,6 +53,8 @@ def build_loop_graph(deps: Deps, checkpointer, starts: list[str], crash: list[bo
         async with deps.sessionmaker() as session:
             approval = await approvals.get_or_create_pending(session, state["run_id"], ITEM, None, {})
             await session.commit()
+        if gate and gate[0] is not None:
+            await gate[0].wait()
         return {"approval_id": approval.id, "rounds": state.get("rounds", 0) + 1}
 
     async def wait(state: LoopState) -> LoopState:
@@ -72,9 +82,10 @@ async def env(settings):
     deps = Deps(settings, sm, channel)
     starts: list[str] = []
     crash = [False]
-    graph = build_loop_graph(deps, InMemorySaver(), starts, crash)
+    gate: list[asyncio.Event | None] = [None]
+    graph = build_loop_graph(deps, InMemorySaver(), starts, crash, gate)
     handler = Handler(deps, {ITEM: GraphEntry(graph, ai_edits=True)})
-    handler.crash = crash  # test hook
+    handler.crash, handler.gate = crash, gate  # test hooks
     yield handler, graph, sm, channel, starts
     await engine.dispose()
 
@@ -211,7 +222,13 @@ async def test_two_step_edit_with_ai_changes(env):
         "approval_id": approval.id,
         "mode": "ai",
         "text": "plus court",
+        "message_id": done.payload["decision"]["message_id"],
     }
+    async with sm() as session:
+        modes = (
+            await session.execute(select(AuditLog.details).where(AuditLog.action == "approval_edit_mode"))
+        ).scalars()
+        assert [d["mode"] for d in modes] == ["ai"]
     state = await graph.aget_state({"configurable": {"thread_id": run_id}})
     assert state.values["decisions"][-1]["mode"] == "ai"
 
@@ -250,5 +267,57 @@ async def test_run_stopped_between_steps_is_finished_on_restart(env):
     assert await waiting_on(graph, run_id) == [second.id]  # the run went on to the next approval
     state = await graph.aget_state({"configurable": {"thread_id": run_id}})
     assert len(state.values["decisions"]) == 1
+    async with sm() as session:
+        assert (await session.get(Approval, first.id)).resumed_at is not None
+
+
+async def test_other_owner_tapping_while_the_run_is_still_starting(env):
+    """Review of #50: owner 2 taps Approve while owner 1's lane is still inside the step that
+    sent the buttons. The resume must wait for the run to pause, not run the graph a second time."""
+    handler, graph, sm, channel, starts = env
+    handler.gate[0] = asyncio.Event()
+    run_id = "loop:race"
+    starting = asyncio.create_task(handler.start_run(ITEM, run_id, {"run_id": run_id}))
+    approval = None
+    for _ in range(200):
+        async with sm() as session:
+            approval = await session.scalar(select(Approval).where(Approval.run_id == run_id))
+        if approval:
+            break
+        await asyncio.sleep(0.01)
+    assert approval is not None
+
+    tap = asyncio.create_task(handler.handle(msg(OWNER_2, button=f"approve:{approval.id}:1")))
+    await asyncio.sleep(0.2)
+    assert not tap.done()  # waiting for the run lock
+    handler.gate[0].set()
+    await asyncio.gather(starting, tap)
+
+    state = await graph.aget_state({"configurable": {"thread_id": run_id}})
+    assert state.next == () and [d["action"] for d in state.values["decisions"]] == ["approve"]
+    async with sm() as session:
+        assert await session.scalar(select(func.count()).select_from(Approval)) == 1  # no second approval
+        assert (await session.get(Approval, approval.id)).resumed_at is not None
+    assert handler._run_locks == {}  # locks are released and forgotten
+
+
+async def test_retried_edit_message_finishes_the_resume(env):
+    """Review of #50: the edit was saved, then the resume failed. The worker retries the same
+    message: it must finish the resume, not be echoed as a new text."""
+    handler, graph, sm, channel, starts = env
+    run_id = await start(graph)
+    first = await open_approval(sm, run_id)
+    await handler.handle(msg(OWNER_1, button=f"edit:{first.id}:1"))
+    await handler.handle(msg(OWNER_1, button=f"edit_text:{first.id}:2"))
+    edit_text = msg(OWNER_1, text="Nouveau texte")
+    handler.crash[0] = True
+    with pytest.raises(RuntimeError):
+        await handler.handle(edit_text)
+
+    await handler.handle(edit_text)  # worker retry, same message id
+
+    second = await open_approval(sm, run_id)
+    assert await waiting_on(graph, run_id) == [second.id]
+    assert not any(m["body"].startswith("Echo:") for m in channel.to(OWNER_1))
     async with sm() as session:
         assert (await session.get(Approval, first.id)).resumed_at is not None

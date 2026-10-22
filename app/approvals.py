@@ -89,6 +89,24 @@ async def set_edit_mode(
     return result.scalar_one_or_none()
 
 
+async def unresumed_edit_for_message(
+    session: AsyncSession, owner_phone: str, message_id: str
+) -> Approval | None:
+    """The edit this exact WhatsApp message decided, if its resume never finished (the worker
+    retries the message after a failure; the approval is already `edited` by then)."""
+    result = await session.execute(
+        select(Approval)
+        .where(
+            Approval.status == "edited",
+            Approval.decided_by == owner_phone,
+            Approval.resumed_at.is_(None),
+            Approval.payload["decision"]["message_id"].astext == message_id,
+        )
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
 async def editing_for(session: AsyncSession, owner_phone: str) -> Approval | None:
     """The approval this owner tapped Edit on and still owes replacement text for."""
     result = await session.execute(

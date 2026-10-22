@@ -109,6 +109,9 @@ def test_split_text_without_breaks_keeps_everything():
     text = "x" * 9000
     parts = split_text(text)
     assert [len(p) for p in parts] == [4096, 4096, 808] and "".join(parts) == text
+    # A whitespace-only tail never becomes an empty message (Meta rejects those).
+    assert split_text("x" * 4096 + "\n\n") == ["x" * 4096]
+    assert split_text("") == [""]
 
 
 @pytest.mark.parametrize(

@@ -2,11 +2,15 @@
 
 Approval buttons and edit texts are routed to the graph that owns the approval, by its
 `item_type` (`Handler.graphs`). A graph is only resumed when it is actually waiting on that
-approval: see `_resume`.
+approval: see `_resume`. Every graph call for a run holds that run's lock, so two owners' lanes
+never run the same graph at once (the API is one process, CLAUDE.md §12).
 """
 
+import asyncio
 import logging
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -49,6 +53,28 @@ class Handler:
     def __init__(self, deps: Deps, graphs: dict[str, GraphEntry]) -> None:
         self.deps = deps
         self.graphs = graphs
+        self._run_locks: dict[str, tuple[asyncio.Lock, int]] = {}  # run_id → (lock, users)
+
+    @asynccontextmanager
+    async def _run_lock(self, run_id: str) -> AsyncIterator[None]:
+        """One graph call at a time per run. Without it, an owner's resume could see a run that
+        the other owner's lane is still executing as "stopped between steps" and run it twice."""
+        lock, users = self._run_locks.get(run_id, (asyncio.Lock(), 0))
+        self._run_locks[run_id] = (lock, users + 1)
+        try:
+            async with lock:
+                yield
+        finally:
+            lock, users = self._run_locks[run_id]
+            if users <= 1:
+                del self._run_locks[run_id]
+            else:
+                self._run_locks[run_id] = (lock, users - 1)
+
+    async def start_run(self, item_type: str, run_id: str, inputs: dict[str, Any]) -> None:
+        """Start a graph run (under its run lock)."""
+        async with self._run_lock(run_id):
+            await self.graphs[item_type].graph.ainvoke(inputs, {"configurable": {"thread_id": run_id}})
 
     async def handle(self, msg: InboundMessage) -> None:
         async with self.deps.sessionmaker() as session:
@@ -140,6 +166,9 @@ class Handler:
             await session.commit()
             current = chosen or await session.get(Approval, approval_id)
         if chosen is not None:
+            async with self.deps.sessionmaker() as session:
+                audit(session, owner.phone, "approval_edit_mode", "approval", approval_id, mode=mode)
+                await session.commit()
             await self._reply(owner, msg, EDIT_PROMPTS[mode])
         elif current is None:
             await self._reply(owner, msg, "That request no longer exists.")
@@ -176,7 +205,12 @@ class Handler:
         text = (msg.text or "").strip()
 
         async with self.deps.sessionmaker() as session:
-            editing = await approvals.editing_for(session, owner.phone)
+            # Retry of an edit text whose resume failed after the edit was saved: finish it.
+            retried = await approvals.unresumed_edit_for_message(session, owner.phone, msg.message_id)
+            editing = None if retried else await approvals.editing_for(session, owner.phone)
+        if retried is not None:
+            await self._resume(retried)
+            return
         if editing is not None:
             await self._finish_edit(owner, msg, editing, text)
             return
@@ -208,6 +242,7 @@ class Handler:
             "approval_id": approval.id,
             "mode": mode or "text",
             "text": text,
+            "message_id": msg.message_id,  # lets a retry of this message finish the resume
         }
         async with self.deps.sessionmaker() as session:
             done = await approvals.transition(
@@ -231,10 +266,7 @@ class Handler:
             audit(session, owner.phone, "demo_started", "run", run_id)
             await session.commit()
         log.info("starting approval_demo run %s", run_id)
-        await self.graphs[approval_demo.ITEM_TYPE].graph.ainvoke(
-            {"run_id": run_id, "requested_by": owner.phone},
-            {"configurable": {"thread_id": run_id}},
-        )
+        await self.start_run(approval_demo.ITEM_TYPE, run_id, {"run_id": run_id, "requested_by": owner.phone})
 
     # --- helpers -----------------------------------------------------------
 
@@ -256,24 +288,25 @@ class Handler:
             log.error("no graph for approval %s (item_type %s)", approval.id, approval.item_type)
             return
         config = {"configurable": {"thread_id": approval.run_id}}
-        state = await entry.graph.aget_state(config)
-        if _waiting_on(state, approval.id):
-            log.info("resuming run %s with %s", approval.run_id, decision["action"])
-            await entry.graph.ainvoke(Command(resume=decision), config)
-        elif state.next and not state.interrupts:
-            # Stopped between steps (crash after the decision was delivered, before the next
-            # pause): finish the run. No resume value, so no old decision can reach a later wait.
-            log.info("continuing interrupted run %s", approval.run_id)
-            await entry.graph.ainvoke(None, config)
-        else:
-            log.warning(
-                "run %s is not waiting on approval %s; decision not delivered again",
-                approval.run_id,
-                approval.id,
-            )
-        async with self.deps.sessionmaker() as session:
-            await approvals.mark_resumed(session, approval.id)
-            await session.commit()
+        async with self._run_lock(approval.run_id):
+            state = await entry.graph.aget_state(config)
+            if _waiting_on(state, approval.id):
+                log.info("resuming run %s with %s", approval.run_id, decision["action"])
+                await entry.graph.ainvoke(Command(resume=decision), config)
+            elif state.next and not state.interrupts:
+                # Stopped between steps (crash after the decision was delivered, before the next
+                # pause): finish the run. No resume value, so no old decision can reach a later wait.
+                log.info("continuing interrupted run %s", approval.run_id)
+                await entry.graph.ainvoke(None, config)
+            else:
+                log.warning(
+                    "run %s is not waiting on approval %s; decision not delivered again",
+                    approval.run_id,
+                    approval.id,
+                )
+            async with self.deps.sessionmaker() as session:
+                await approvals.mark_resumed(session, approval.id)
+                await session.commit()
 
     async def resume_unfinished(self) -> None:
         """At startup: resume graphs whose decision was saved but never delivered."""

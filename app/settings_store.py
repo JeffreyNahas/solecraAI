@@ -4,7 +4,7 @@ Env vars (`app/config.py`) hold deployment config; this table holds what changes
 pausing outreach, the daily cap, when the next email may go out. Every write is audited.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -55,6 +55,7 @@ async def email_next_send_at(session: AsyncSession) -> datetime | None:
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value)
+        when = datetime.fromisoformat(value)
     except (TypeError, ValueError):
         return None
+    return when if when.tzinfo else when.replace(tzinfo=UTC)  # never naive: compared to now(UTC)

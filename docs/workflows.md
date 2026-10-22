@@ -62,6 +62,17 @@ After a winning Approve/Reject (or the edit text), the handler resumes the graph
 | Stopped between steps, no pause (crash after the decision was delivered) | Continue the run with `ainvoke(None)`: no decision, so none can reach a later pause |
 | Finished, missing, or paused on a newer approval (edit loop) | Only mark delivered: resuming a missing thread would restart it from the beginning, and an old decision must never answer a newer approval |
 
+Every graph call for a run (start, state check + resume) holds that run's `asyncio.Lock`
+(`Handler._run_lock`). Owners' lanes run in parallel; without the lock, a tap that arrives while
+the other lane is still inside the step that sent the buttons would see the run as "stopped
+between steps" and run it twice. The API is a single process (CLAUDE.md §12), so an in-process
+lock is enough; graphs started by the scheduler (#47) must pause before their buttons go out.
+
+An edit decision carries the WhatsApp `message_id` that delivered it. If the resume fails after the
+edit was saved, the worker's retry of that same message finds the unresumed edit
+(`approvals.unresumed_edit_for_message`) and finishes the resume instead of treating the text as a
+new message. Choosing the edit mode is audited (`approval_edit_mode`).
+
 ## Graph: `approval_demo` (`app/graphs/approval_demo.py`)
 
 ```

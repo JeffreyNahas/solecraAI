@@ -46,5 +46,8 @@ async def test_bad_values_fall_back_safely(settings):
             assert await store.email_next_send_at(session) is None
             await store.set_setting(session, store.OUTREACH_DAILY_CAP, -3, "system")
             assert await store.outreach_daily_cap(session, default=15) == 0
+            await store.set_setting(session, store.EMAIL_NEXT_SEND_AT, "2026-10-23T09:00:00", "system")
+            when = await store.email_next_send_at(session)
+            assert when.tzinfo is not None and when.isoformat() == "2026-10-23T09:00:00+00:00"
     finally:
         await engine.dispose()

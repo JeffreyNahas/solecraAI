@@ -32,7 +32,7 @@ with Meta's error codes. Sample payloads: `tests/fixtures/`.
 
 - `send_text` — text; over 4,096 chars it is **split** (at a paragraph, line or word break) into
   several messages keyed `key`, `key:part2`, … Nothing is ever cut: owners must see every word
-  they approve.
+  they approve. A whitespace-only tail is dropped, never sent as an empty message.
 - `send_buttons` — interactive message, body ≤ 1,024 chars, 1–3 reply buttons, titles ≤ 20 chars.
   Over a limit it raises `ValueError` instead of cutting; callers send long text first.
 - `send_template(to, name, language, params, key, button_payloads)` — an approved template (the only

@@ -42,7 +42,8 @@ def split_text(body: str, limit: int = MAX_TEXT) -> list[str]:
             cut = limit
         parts.append(rest[:cut].rstrip())
         rest = rest[cut:].lstrip("\n ")
-    parts.append(rest)
+    if rest or not parts:  # never an empty trailing message (Meta rejects it)
+        parts.append(rest)
     return parts
 
 
