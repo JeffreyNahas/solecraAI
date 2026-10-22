@@ -241,10 +241,12 @@ class Handler:
     async def _resume(self, approval: Approval) -> None:
         """Deliver an owner's decision to the graph waiting on this approval.
 
-        Only when the graph's saved state is paused on *this* approval. Otherwise (thread
-        finished, missing, or now waiting on a newer approval after an edit loop) resuming would
-        restart the graph from the beginning or hand this old decision to another approval, so
-        the decision is just marked delivered."""
+        - Paused on *this* approval → resume with the decision.
+        - Stopped between steps (crashed after the decision was delivered) → continue the run
+          without a decision.
+        - Finished, missing, or paused on a newer approval (edit loop) → only mark it delivered:
+          resuming would restart the graph from the beginning or hand this old decision to
+          another approval."""
         decision = (approval.payload or {}).get("decision")
         if not decision:
             log.error("approval %s has no stored decision", approval.id)
@@ -258,6 +260,11 @@ class Handler:
         if _waiting_on(state, approval.id):
             log.info("resuming run %s with %s", approval.run_id, decision["action"])
             await entry.graph.ainvoke(Command(resume=decision), config)
+        elif state.next and not state.interrupts:
+            # Stopped between steps (crash after the decision was delivered, before the next
+            # pause): finish the run. No resume value, so no old decision can reach a later wait.
+            log.info("continuing interrupted run %s", approval.run_id)
+            await entry.graph.ainvoke(None, config)
         else:
             log.warning(
                 "run %s is not waiting on approval %s; decision not delivered again",

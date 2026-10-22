@@ -54,10 +54,13 @@ the graph instead.
 
 After a winning Approve/Reject (or the edit text), the handler resumes the graph:
 `graph.ainvoke(Command(resume=decision), {"configurable": {"thread_id": run_id}})`, then sets
-`resumed_at`. **Only if the graph's saved state is paused in an `interrupt()` whose value has this
-`approval_id`** (`graph.aget_state`). Otherwise (thread finished, missing, or waiting on a newer
-approval after an edit loop) the decision is only marked delivered: resuming a missing thread would
-restart the graph from the beginning, and an old decision must never answer a newer approval.
+`resumed_at`. What happens depends on the graph's saved state (`graph.aget_state`):
+
+| Saved state | Action |
+|---|---|
+| Paused in an `interrupt()` whose value has **this** `approval_id` | Resume with the decision |
+| Stopped between steps, no pause (crash after the decision was delivered) | Continue the run with `ainvoke(None)`: no decision, so none can reach a later pause |
+| Finished, missing, or paused on a newer approval (edit loop) | Only mark delivered: resuming a missing thread would restart it from the beginning, and an old decision must never answer a newer approval |
 
 ## Graph: `approval_demo` (`app/graphs/approval_demo.py`)
 

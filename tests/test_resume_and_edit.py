@@ -32,12 +32,16 @@ class LoopState(TypedDict, total=False):
     rounds: int
 
 
-def build_loop_graph(deps: Deps, checkpointer, starts: list[str]):
-    """ask → wait → (edited: ask again with a NEW approval) → done. Records every start."""
+def build_loop_graph(deps: Deps, checkpointer, starts: list[str], crash: list[bool] | None = None):
+    """ask → wait → (edited: ask again with a NEW approval) → done. Records every start.
+    `crash=[True]` makes the next re-ask raise once (a container restart mid-step)."""
 
     async def ask(state: LoopState) -> LoopState:
         if not state.get("rounds"):
             starts.append(state["run_id"])
+        elif crash and crash[0]:
+            crash[0] = False
+            raise RuntimeError("container restarted")
         async with deps.sessionmaker() as session:
             approval = await approvals.get_or_create_pending(session, state["run_id"], ITEM, None, {})
             await session.commit()
@@ -67,8 +71,10 @@ async def env(settings):
     channel = FakeChannel()
     deps = Deps(settings, sm, channel)
     starts: list[str] = []
-    graph = build_loop_graph(deps, InMemorySaver(), starts)
+    crash = [False]
+    graph = build_loop_graph(deps, InMemorySaver(), starts, crash)
     handler = Handler(deps, {ITEM: GraphEntry(graph, ai_edits=True)})
+    handler.crash = crash  # test hook
     yield handler, graph, sm, channel, starts
     await engine.dispose()
 
@@ -220,3 +226,29 @@ async def test_edit_mode_button_on_old_version_is_refused(env):
         row = await session.get(Approval, approval.id)
     assert "edit_mode" not in row.payload
     assert channel.to(OWNER_1)[-1]["body"] == "✏️ Still waiting for your edit."
+
+
+async def test_run_stopped_between_steps_is_finished_on_restart(env):
+    """Review of #50: the decision was delivered, then the process died before the graph paused
+    again. On restart the run must continue (not be dropped), without delivering the decision twice."""
+    handler, graph, sm, channel, starts = env
+    run_id = await start(graph)
+    first = await open_approval(sm, run_id)
+    await handler.handle(msg(OWNER_1, button=f"edit:{first.id}:1"))
+    await handler.handle(msg(OWNER_1, button=f"edit_text:{first.id}:2"))
+    handler.crash[0] = True
+    with pytest.raises(RuntimeError, match="container restarted"):
+        await handler.handle(msg(OWNER_1, text="Nouveau texte"))
+    state = await graph.aget_state({"configurable": {"thread_id": run_id}})
+    assert state.next == ("ask",) and not state.interrupts  # stopped between steps
+    async with sm() as session:
+        assert (await session.get(Approval, first.id)).resumed_at is None
+
+    await handler.resume_unfinished()
+
+    second = await open_approval(sm, run_id)
+    assert await waiting_on(graph, run_id) == [second.id]  # the run went on to the next approval
+    state = await graph.aget_state({"configurable": {"thread_id": run_id}})
+    assert len(state.values["decisions"]) == 1
+    async with sm() as session:
+        assert (await session.get(Approval, first.id)).resumed_at is not None

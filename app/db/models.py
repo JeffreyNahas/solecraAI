@@ -246,6 +246,10 @@ class EmailSend(Base):
     link must keep working for at least 60 days (CASL)."""
 
     __tablename__ = "email_sends"
+    __table_args__ = (
+        UniqueConstraint("unsubscribe_token", name="uq_email_sends_unsubscribe_token"),
+        UniqueConstraint("rfc_message_id", name="uq_email_sends_rfc_message_id"),
+    )
 
     idempotency_key: Mapped[str] = mapped_column(String, primary_key=True)
     draft_id: Mapped[int | None] = mapped_column(ForeignKey("email_drafts.id", ondelete="SET NULL"))
@@ -257,8 +261,8 @@ class EmailSend(Base):
     subject: Mapped[str] = mapped_column(Text)
     rendered_text: Mapped[str] = mapped_column(Text)
     content_sha256: Mapped[str] = mapped_column(String)  # of the approved text; re-checked at send
-    unsubscribe_token: Mapped[str | None] = mapped_column(String, unique=True)
-    rfc_message_id: Mapped[str | None] = mapped_column(String, unique=True)
+    unsubscribe_token: Mapped[str | None] = mapped_column(String)
+    rfc_message_id: Mapped[str | None] = mapped_column(String)
     status: Mapped[str] = mapped_column(String, default="queued", index=True)  # SEND_STATUSES
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(Text)
