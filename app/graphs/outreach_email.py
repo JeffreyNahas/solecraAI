@@ -197,15 +197,18 @@ def build_outreach_graph(deps: Deps, checkpointer: BaseCheckpointSaver):
         held = mode == "test" and intended not in settings.test_recipients()
         async with deps.sessionmaker() as session:
             # Unsubscribed or closed since the draft was made (up to 2 business days)? Then no email.
-            current = await session.get(Lead, primary.id)
+            # Lock the lead row first: an unsubscribe that is applying right now (it locks the same
+            # row) finishes before we look, or waits until our email row is committed and cancels it.
+            current = await session.scalar(
+                select(Lead)
+                .where(Lead.id == primary.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
             blocked = (
-                await is_suppressed(session, intended)
-                or current is None
-                or current.status
-                not in (
-                    "drafted",
-                    "approved",
-                )
+                current is None
+                or current.status not in ("drafted", "approved")
+                or await is_suppressed(session, intended)
             )
             already = await session.get(EmailSend, key)
             if blocked and already is None:

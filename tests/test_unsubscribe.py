@@ -1,5 +1,7 @@
 """Unsubscribe page and instant opt-out (#48): GET never unsubscribes, POST does everything at once."""
 
+import asyncio
+import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
@@ -7,7 +9,8 @@ import httpx
 import pytest
 from sqlalchemy import func, select, update
 
-from app.db.models import Approval, AuditLog, EmailDraft, EmailSend, Lead, Owner, Suppression
+from app.db.models import Approval, AuditLog, EmailDraft, EmailSend, InboundMessage, Lead, Owner, Suppression
+from app.graphs import outreach_email
 from app.jobs.outreach_draft import outreach_draft_job
 from app.main import create_app
 from app.runs import RunHandle
@@ -44,13 +47,20 @@ def app_with_company(settings, channel):
     return _run
 
 
-async def add_send(sm, key, to, status="queued", token=None, lead_id=None) -> str:
+async def open_windows(sm) -> None:
+    """Both owners wrote to the bot just now (free-form WhatsApp text can reach them)."""
+    async with sm() as session:
+        await session.execute(update(Owner).values(last_inbound_at=datetime.now(UTC)))
+        await session.commit()
+
+
+async def add_send(sm, key, to, status="queued", token=None, lead_id=None, mode="live") -> str:
     async with sm() as session:
         session.add(
             EmailSend(
                 idempotency_key=key,
                 lead_id=lead_id,
-                mode="live",
+                mode=mode,
                 intended_to=to,
                 subject="Objet",
                 rendered_text="Bonjour",
@@ -142,6 +152,7 @@ async def test_underscore_in_an_address_does_not_match_other_people(app_with_com
 async def test_unsent_emails_are_cancelled_but_a_sent_one_is_left_alone(app_with_company, channel):
     async with app_with_company() as (app, client):
         sm = app.state.sessionmaker
+        await open_windows(sm)
         await add_send(sm, "initial:1:live", "info@acme.example", status="sent", token=TOKEN)
         await add_send(sm, "initial:2:live", "ventes@acme.example", status="queued", token="t2")
         await add_send(sm, "initial:3:live", "projets@acme.example", status="held", token="t3")
@@ -223,11 +234,7 @@ async def test_an_unsubscribe_closes_the_draft_waiting_for_approval(app_with_com
         deps.llm = ScriptedLLM()
         deps.web = None
         lead = await add_lead(sm, "A1", "info@groupehd.example", 90)
-        async with sm() as session:
-            await session.execute(
-                update(Owner).where(Owner.phone == OWNER_1).values(last_inbound_at=datetime.now(UTC))
-            )
-            await session.commit()
+        await open_windows(sm)
         await outreach_draft_job(deps, RunHandle(0, "outreach_draft"), now=THURSDAY)
         async with sm() as session:
             approval = await session.scalar(select(Approval).where(Approval.status == "pending"))
@@ -269,3 +276,97 @@ async def test_later_drafting_skips_an_unsubscribed_company(app_with_company):
         async with sm() as session:
             assert (await session.get(Lead, new_permit)).status == "do_not_contact"
         assert run.counts.get("suppressed") == 1 and deps.llm.users == []
+
+
+async def test_owner_notice_waits_for_an_open_window(app_with_company, channel):
+    """Review of #53: free-form text outside the 24 h window is lost, so it isn't sent."""
+    async with app_with_company() as (app, client):
+        sm = app.state.sessionmaker
+        await add_send(sm, "initial:2:live", "ventes@acme.example", status="queued", token=TOKEN)
+        await client.post(f"/u/{TOKEN}")  # nobody wrote to the bot recently
+        assert await statuses(sm, EmailSend, order="idempotency_key") == ["cancelled"]
+    assert channel.sent == []
+
+
+async def test_a_test_mode_unsubscribe_covers_the_address_only(app_with_company):
+    """Review of #53: a tester on the company's own domain must not suppress the whole domain."""
+    async with app_with_company() as (app, client):
+        sm = app.state.sessionmaker
+        tester = await add_lead(sm, "T", "jeff@solecra.example", 80)
+        colleague = await add_lead(sm, "C", "carl@solecra.example", 70)
+        await add_send(sm, "initial:1:test", "jeff@solecra.example", token=TOKEN, lead_id=tester, mode="test")
+        await client.post(f"/u/{TOKEN}")
+        async with sm() as session:
+            assert await is_suppressed(session, "jeff@solecra.example")
+            assert not await is_suppressed(session, "carl@solecra.example")
+            assert (await session.get(Lead, tester)).status == "do_not_contact"
+            assert (await session.get(Lead, colleague)).status == "qualified"
+
+
+async def test_an_old_button_after_an_unsubscribe_says_why(app_with_company, channel):
+    async with app_with_company() as (app, client):
+        sm, deps, handler = app.state.sessionmaker, app.state.deps, app.state.handler
+        deps.llm = ScriptedLLM()
+        deps.web = None
+        await add_lead(sm, "A1", "info@groupehd.example", 90)
+        await open_windows(sm)
+        await outreach_draft_job(deps, RunHandle(0, "outreach_draft"), now=THURSDAY)
+        async with sm() as session:
+            approval = await session.scalar(select(Approval).where(Approval.status == "pending"))
+        await add_send(sm, "initial:0:live", "info@groupehd.example", status="sent", token=TOKEN)
+        await client.post(f"/u/{TOKEN}")
+
+        await handler.handle(inbound(OWNER_1, button=f"approve:{approval.id}:1"))
+
+        assert channel.to(OWNER_1)[-1]["body"] == "Closed: the prospect unsubscribed."
+        async with sm() as session:
+            assert await session.scalar(select(func.count()).select_from(EmailSend)) == 1
+
+
+def inbound(sender, *, button=None):
+    return InboundMessage(
+        message_id=f"wamid.{uuid.uuid4().hex[:8]}",
+        sender=sender,
+        msg_type="button",
+        button_id=button,
+        payload={},
+    )
+
+
+async def test_unsubscribe_racing_an_approval_leaves_no_queued_email(app_with_company, monkeypatch):
+    """Review of #53 (blocking): the owner taps Approve while the prospect unsubscribes. The
+    approval is paused right after its email row is inserted (not yet committed); the unsubscribe
+    runs meanwhile. Either order must end with no queued email and a do_not_contact lead."""
+    async with app_with_company() as (app, client):
+        sm, deps, handler = app.state.sessionmaker, app.state.deps, app.state.handler
+        deps.llm = ScriptedLLM()
+        deps.web = None
+        lead = await add_lead(sm, "A1", "info@groupehd.example", 90)
+        await outreach_draft_job(deps, RunHandle(0, "outreach_draft"), now=THURSDAY)
+        async with sm() as session:
+            approval = await session.scalar(select(Approval).where(Approval.status == "pending"))
+        await add_send(sm, "initial:0:live", "info@groupehd.example", status="sent", token=TOKEN)
+
+        inserted, release = asyncio.Event(), asyncio.Event()
+        real_move = outreach_email.move_leads
+
+        async def paused_move(*args, **kwargs):
+            inserted.set()  # the email row is inserted but not committed
+            await release.wait()
+            return await real_move(*args, **kwargs)
+
+        monkeypatch.setattr(outreach_email, "move_leads", paused_move)
+        tap = asyncio.create_task(handler.handle(inbound(OWNER_1, button=f"approve:{approval.id}:1")))
+        await asyncio.wait_for(inserted.wait(), 10)
+        unsubscribe_request = asyncio.create_task(client.post(f"/u/{TOKEN}"))
+        await asyncio.sleep(0.5)
+        assert not unsubscribe_request.done()  # waiting for the approval's lock on the lead
+        release.set()
+        await asyncio.gather(tap, unsubscribe_request)
+
+        async with sm() as session:
+            sends = {
+                s.idempotency_key: s.status for s in (await session.execute(select(EmailSend))).scalars()
+            }
+            assert sends[f"initial:{lead}:test"] == "cancelled"  # queued, then cancelled by the opt-out
+            assert (await session.get(Lead, lead)).status == "do_not_contact"

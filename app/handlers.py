@@ -200,6 +200,14 @@ class Handler:
         if approval.status == "editing" and approval.decided_by == owner.phone:
             await self._reply(owner, msg, "✏️ Still waiting for your edit.")
             return
+        if approval.decided_by == "system":
+            action = ((approval.payload or {}).get("decision") or {}).get("action")
+            reason = {
+                "unsubscribed": "the prospect unsubscribed",
+                "expire": "nobody decided in time",
+            }.get(action, "it was closed automatically")
+            await self._reply(owner, msg, f"Closed: {reason}.")
+            return
         if approval.decided_by and approval.decided_by != owner.phone:
             async with self.deps.sessionmaker() as session:
                 other = await session.get(Owner, approval.decided_by)

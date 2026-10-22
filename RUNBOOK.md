@@ -307,6 +307,9 @@ docker compose exec scheduler python -m scripts.run_job outreach_draft    # run 
 docker compose exec postgres psql -U solecra -c "select id, lead_id, status, revision, subject from email_drafts order by id desc limit 10"
 docker compose exec postgres psql -U solecra -c "select idempotency_key, status, intended_to, approved_by from email_sends order by created_at desc limit 10"
 ```
+Unsubscribe links (`<PUBLIC_BASE_URL>/u/<token>`) work as soon as the API is reachable at that URL.
+In `EMAIL_MODE=test`, unsubscribing from a test email suppresses that one address only.
+Un-suppress a tester (the code never removes entries): `delete from suppression where email_or_domain='me@example.com';`
 Pause all outreach: `insert into settings(key, value, updated_by) values ('outreach_paused', 'true', 'jeff') on conflict (key) do update set value='true';`
 Why a draft was blocked: `select guard from email_drafts where status='blocked'`.
 

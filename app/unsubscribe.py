@@ -28,6 +28,7 @@ from app.db.audit import audit
 from app.db.models import Approval, EmailDraft, EmailSend, Lead
 from app.deps import Deps
 from app.leads import TransitionError, email_domain, transition
+from app.outreach.present import window_open
 from app.owners import active_owners
 from app.suppression import is_suppressed, suppress
 
@@ -62,7 +63,9 @@ async def find_send(session: AsyncSession, token: str) -> EmailSend | None:
 async def apply_unsubscribe(session: AsyncSession, send: EmailSend) -> Unsubscribed:
     """Apply an opt-out for the address this email was sent to. Caller commits."""
     address = send.intended_to.strip().lower()
-    domain = email_domain(address)
+    # A test email (to a tester's own address, maybe on the company's domain) opts out that
+    # address only: the whole domain would stay suppressed forever.
+    domain = email_domain(address) if send.mode == "live" else None
     result = Unsubscribed(address=address, domain=domain)
 
     result.already = await is_suppressed(session, address)
@@ -72,23 +75,25 @@ async def apply_unsubscribe(session: AsyncSession, send: EmailSend) -> Unsubscri
 
     # Exact matches only (never LIKE: "_" in an address is a wildcard and would hit other people).
     same_company = Lead.email_domain == domain if domain else func.lower(Lead.email) == address
-    leads = list((await session.execute(select(Lead).where(same_company).order_by(Lead.id))).scalars())
+    # Locked (in id order): an approval queueing an email for one of them finishes first, so its
+    # email row is committed before we cancel emails below.
+    leads = list(
+        (
+            await session.execute(
+                select(Lead)
+                .where(same_company)
+                .order_by(Lead.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalars()
+    )
     lead_ids = [lead.id for lead in leads]
     for lead in leads:
         if lead.status == "do_not_contact":
             continue
-        try:
-            await transition(
-                session,
-                lead.id,
-                "do_not_contact",
-                expected_version=lead.version,
-                actor=ACTOR,
-                reason="unsubscribed",
-            )
-        except TransitionError:  # changed meanwhile: re-read once; an opt-out always applies
-            await session.refresh(lead)
-            if lead.status != "do_not_contact":
+        for _attempt in range(3):  # an opt-out always applies: re-read and retry if it changed meanwhile
+            try:
                 await transition(
                     session,
                     lead.id,
@@ -97,6 +102,13 @@ async def apply_unsubscribe(session: AsyncSession, send: EmailSend) -> Unsubscri
                     actor=ACTOR,
                     reason="unsubscribed",
                 )
+                break
+            except TransitionError:
+                await session.refresh(lead)
+                if lead.status == "do_not_contact":
+                    break
+        else:
+            raise TransitionError(f"lead {lead.id} kept changing; opt-out not applied")
         result.leads += 1
         if lead.business_name and lead.business_name not in result.business_names:
             result.business_names.append(lead.business_name)
@@ -193,6 +205,11 @@ async def tell_owners(deps: Deps, result: Unsubscribed, send_key: str) -> None:
     async with deps.sessionmaker() as session:
         owners = await active_owners(session)
     for owner in owners:
+        if not window_open(owner):
+            # Meta doesn't deliver free-form text outside the 24 h window: say so honestly instead
+            # of pretending. The owner sees the result in the daily digest (#12).
+            log.warning("owner %s not told of an unsubscribe: 24 h window closed", owner.name)
+            continue
         try:
             await deps.channel.send_text(owner.phone, text, key=f"unsubscribe:{send_key}:{owner.phone}")
         except ChannelError:
