@@ -271,7 +271,8 @@ answers go back to the model as tool messages; the last turn forces `submit_answ
    (otherwise they'd block every other draft). Approval rejected by `system` with decision `expire`
    (first action wins against an owner's tap), leads back to `qualified`.
 3. **Finish stuck runs**: drafts still `drafting`/`pending` > 10 min whose run isn't paused are
-   continued (`ainvoke(None)`) or started. Then **release stale links**: a `qualified` lead linked
+   continued (`ainvoke(None)`) or started — except a run with an owner's decision not yet delivered
+   (the API delivers it; running it here too would run the same step twice). Then **release stale links**: a `qualified` lead linked
    (`primary_lead_id`) to a lead that was never emailed (its draft expired, was rejected, blocked or
    failed) is unlinked, so the company is grouped and drafted again with all its permits.
 4. **Pick** `qualified` leads with an email and consent URL, not linked to another lead:
@@ -294,7 +295,8 @@ answers go back to the model as tool messages; the last turn forces `submit_answ
   never see it.
 - `request_approval`: approval `item_type=outreach_email`, `item_id=<draft_id>`. Nothing is sent here.
 - `apply`:
-  - **Approve** → render (`app/outreach/render.py`), final check (`check_rendered`), insert
+  - **Approve** → if the address was suppressed or the lead closed since drafting, draft `cancelled`
+    and nothing is queued; else render (`app/outreach/render.py`), final check (`check_rendered`), insert
     `email_sends` keyed `initial:<primary lead>:<mode>` (ON CONFLICT DO NOTHING), draft `approved`,
     leads `drafted → approved`, audit `outreach_queued`. In test mode (`EMAIL_MODE=test`) a recipient
     outside `EMAIL_TEST_RECIPIENTS` is `held` (never sent). **The graph never sends email** (#49).
@@ -322,13 +324,13 @@ whose window is closed, else a text. Message keys include approval id + version:
 | Blocked | Why |
 |---|---|
 | Numbers not in the facts given to the model (address, units, permit text) or `OUTREACH_ALLOWED_NUMBERS` | §2 rule 4 |
-| Price/cost words (`prix`, `coût`, `rabais`, `$`, `%`, `price`, `discount`…) | rule 3 |
+| Price/cost words (`prix`, `coût`, `rabais`, `dollars`, `frais`, `taxes`, `$`, `%`, `price`, `fee`, `discount`…) | rule 3 |
 | Duration words (`minute`, `heure`, `jour`, `semaine`, `délai`, `day`, `week`…) | rule 3 (labour time) |
-| Measurements (`po`, `pi`, `cm`, `ft`, `36 x 48`, `²`…) | rule 3 |
+| Measurements (`po`, `pouce`, `pied`, `cm`, `ft`, `36 x 48`, `²`…) | rule 3 |
 | `OUTREACH_BLOCKED_TERMS` (supplier / brand names) | rule 3 |
 | Links other than `COMPANY_WEBSITE` (any URL, `www.`, or bare domain such as `bit.ly/x`, `promo.xyz`), any email address | rule 5 (injected links), contact block is code's |
 | Placeholders/markup (`[`, `{`, `<`, `xxx`, `lorem`), greeting or sign-off in the body | code adds them |
-| Not the lead's language (function-word check) | Bill 96 |
+| Not the lead's language (function-word check on the body, and on the subject when it has telling words) | Bill 96 |
 | Subject > 90 or body < 40 / > 1,500 characters | |
 
 The final email must carry every identity field, the unsubscribe link and the List-Unsubscribe

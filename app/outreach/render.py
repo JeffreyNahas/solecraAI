@@ -10,6 +10,7 @@ So identification and unsubscribe never depend on the model.
 """
 
 import hashlib
+import re
 import secrets
 from dataclasses import dataclass
 from urllib.parse import urlsplit
@@ -106,6 +107,21 @@ ROLE_LABELS = {
 }
 
 
+_NAME_RE = re.compile(r"^[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ' .-]{0,59}$")
+
+
+def safe_name(name: str | None) -> str | None:
+    """The contact's name comes from a web page via the research model: use it in the greeting only
+    if it looks like a person's name (letters, spaces, apostrophes, hyphens, dots; ≤ 60 characters,
+    ≤ 5 words). Anything else (a link, a sentence, an address) falls back to "Bonjour,"."""
+    cleaned = " ".join((name or "").split())
+    if not cleaned or not _NAME_RE.match(cleaned) or len(cleaned.split()) > 5 or ".." in cleaned:
+        return None
+    if re.search(r"\.[a-z]{2,}\b", cleaned.lower()):  # looks like a domain
+        return None
+    return cleaned
+
+
 def role_label(role: str | None, language: str) -> str | None:
     key = (role or "").strip().lower().replace(" ", "_")
     labels = ROLE_LABELS.get(key)
@@ -145,11 +161,8 @@ def render(
 ) -> RenderedEmail:
     t = _TEXT["en" if language == "en" else "fr"]
     url = f"{identity.public_base_url}/u/{unsubscribe_token}"
-    greeting = (
-        t["hello"].format(name=contact_name.strip())
-        if contact_name and contact_name.strip()
-        else t["hello_anon"]
-    )
+    name = safe_name(contact_name)
+    greeting = t["hello"].format(name=name) if name else t["hello_anon"]
     source = _source_domain(consent_source_url) or identity.website_host
     label = role_label(consent_role, language)
     why = t["why"].format(source=source, role=label) if label else t["why_no_role"].format(source=source)

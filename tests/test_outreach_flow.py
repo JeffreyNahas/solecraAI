@@ -548,3 +548,50 @@ async def test_links_to_a_draft_that_ended_unsent_are_released(env):
     async with sm() as session:
         latest = await session.scalar(select(EmailDraft).order_by(EmailDraft.id.desc()).limit(1))
     assert latest.status == "pending" and sorted(latest.lead_ids) == sorted([a1, a2, a3])
+
+
+async def test_approving_after_an_unsubscribe_queues_nothing(env):
+    """Review of #51: the address was suppressed between drafting and the owner's tap."""
+    deps, handler, channel, llm, sm = env
+    a1 = await add_lead(sm, "A1", "info@groupehd.example", 90)
+    await run_job(deps)
+    [approval] = await pending(sm)
+    async with sm() as session:
+        await suppress(session, "info@groupehd.example", "unsubscribe")
+        await session.commit()
+    await handler.handle(msg(OWNER_1, button=f"approve:{approval.id}:1"))
+    async with sm() as session:
+        assert await session.scalar(select(func.count()).select_from(EmailSend)) == 0
+        draft = await session.scalar(select(EmailDraft))
+    assert draft.status == "cancelled" and (await get(sm, Lead, a1)).status == "drafted"
+
+
+async def test_morning_job_leaves_an_owner_decision_to_the_api(env):
+    """Review of #51: a decided-but-undelivered approval belongs to the API's resume; the 08:00
+    job must not run the same step at the same time."""
+    deps, handler, channel, llm, sm = env
+    await add_lead(sm, "A1", "info@groupehd.example", 90)
+    await run_job(deps)
+    [approval] = await pending(sm)
+    async with sm() as session:  # Alice tapped Approve; the API hasn't delivered it yet
+        await session.execute(
+            update(Approval)
+            .where(Approval.id == approval.id)
+            .values(
+                status="approved",
+                version=2,
+                decided_by=OWNER_1,
+                payload={"decision": {"action": "approve", "by": OWNER_1, "approval_id": approval.id}},
+            )
+        )
+        await session.execute(update(EmailDraft).values(updated_at=datetime.now(UTC) - timedelta(hours=1)))
+        await session.commit()
+    # Make the run look stopped between steps (what the job would otherwise "finish").
+    graph = handler.graphs[ITEM_TYPE].graph
+    await graph.aupdate_state({"configurable": {"thread_id": approval.run_id}}, None, as_node="wait")
+
+    run = await run_job(deps, now=datetime(2026, 10, 23, 12, tzinfo=UTC))
+
+    assert "stuck_runs_finished" not in run.counts
+    async with sm() as session:
+        assert await session.scalar(select(func.count()).select_from(EmailSend)) == 0

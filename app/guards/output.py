@@ -24,7 +24,8 @@ MIN_BODY = 40
 _NUMBER_RE = re.compile(r"\d+(?:[.,]\d+)*")
 _COST_RE = re.compile(
     r"\$|€|%|\b(cad|prix|cout|couts|tarif|tarifs|rabais|escompte|escomptes|marge|marges|"
-    r"fournisseur|fournisseurs|grossiste|price|prices|pricing|cost|costs|"
+    r"fournisseur|fournisseurs|grossiste|dollar|dollars|piasse|piasses|frais|taxe|taxes|budget|"
+    r"price|prices|pricing|cost|costs|fee|fees|tax|"
     r"rate|rates|discount|discounts|margin|margins|supplier|suppliers|wholesale|cheap|cheapest)\b"
 )
 _DURATION_RE = re.compile(
@@ -154,7 +155,8 @@ def check_body(subject: str, body: str, ctx: GuardContext) -> GuardResult:
         violations.append("body ends with a sign-off (the signature is added automatically)")
 
     language = detect_language(body)
-    if language != ctx.language:
+    subject_language = detect_language(subject)  # None when the subject has no telling words
+    if language != ctx.language or subject_language not in (None, ctx.language):
         expected = "French" if ctx.language == "fr" else "English"
         violations.append(
             f"the email must be in {expected} (Bill 96: French unless the contact uses English)"

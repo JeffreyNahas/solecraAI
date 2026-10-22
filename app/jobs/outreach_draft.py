@@ -155,6 +155,20 @@ async def finish_stuck(deps: Deps, graph: Any, run: RunHandle) -> None:
             ).scalars()
         )
     for draft in drafts:
+        async with deps.sessionmaker() as session:
+            owner_decision_open = await session.scalar(
+                select(Approval.id)
+                .where(
+                    Approval.run_id == draft.run_id,
+                    Approval.status.in_(approvals.FINAL_STATUSES),
+                    Approval.resumed_at.is_(None),
+                )
+                .limit(1)
+            )
+        if owner_decision_open is not None:
+            # An owner's decision is being delivered by the API (or will be at its startup):
+            # running the graph here too would run the same step twice.
+            continue
         config = {"configurable": {"thread_id": draft.run_id}}
         state = await graph.aget_state(config)
         if state.interrupts:

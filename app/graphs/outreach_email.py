@@ -40,6 +40,7 @@ from app.guards.output import GuardContext, check_rendered
 from app.leads import TransitionError, transition
 from app.llm import LLMError
 from app.outreach.render import Identity, new_unsubscribe_token, render
+from app.suppression import is_suppressed
 
 log = logging.getLogger(__name__)
 
@@ -193,6 +194,32 @@ def build_outreach_graph(deps: Deps, checkpointer: BaseCheckpointSaver):
         intended = (primary.email or "").strip().lower()
         held = mode == "test" and intended not in settings.test_recipients()
         async with deps.sessionmaker() as session:
+            # Unsubscribed or closed since the draft was made (up to 2 business days)? Then no email.
+            current = await session.get(Lead, primary.id)
+            blocked = (
+                await is_suppressed(session, intended)
+                or current is None
+                or current.status
+                not in (
+                    "drafted",
+                    "approved",
+                )
+            )
+            already = await session.get(EmailSend, key)
+            if blocked and already is None:
+                row = await session.get(EmailDraft, draft.id)
+                if row.status == "pending":
+                    row.status = "cancelled"
+                audit(
+                    session,
+                    decision.get("by", "system"),
+                    "draft_cancelled",
+                    "email_draft",
+                    draft.id,
+                    reason="suppressed or lead closed before sending",
+                )
+                await session.commit()
+                return {"next": "end", "outcome": "cancelled"}
             inserted = await session.execute(
                 insert(EmailSend)
                 .values(
