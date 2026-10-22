@@ -377,3 +377,5 @@ independent review (`/review-pr`) before Jeff merges. No size limit on PRs.
   commercial fit-out, condo conversion; business-likely buildings only (multi-residential ≥ 4 units,
   commercial, office, institutional), single-family skipped; City of Montréal open data only for now;
   scoring with a cheap AI model (0–100, threshold 60, configurable); first pull = last 30 days.
+  A later permit at the same address is added to the existing lead and re-scored with all its
+  permits if the lead is still `new` or was disqualified by its score.

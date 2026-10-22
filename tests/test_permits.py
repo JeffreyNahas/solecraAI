@@ -214,3 +214,89 @@ async def test_scheduler_skips_unregistered_and_uses_montreal_time(deps, monkeyp
     [job] = build_scheduler(deps).get_jobs()  # the unregistered one is skipped
     assert job.id == "permits_ingest" and str(job.trigger.timezone) == "America/Montreal"
     assert "hour='6'" in str(job.trigger) and "minute='0'" in str(job.trigger)
+
+
+async def test_new_permit_at_known_address_rescores_or_is_recorded(deps):
+    """Decided 2026-10-22 (#43): a later permit at the same address is added to the lead; the lead is
+    re-scored with all its permits if still `new` or disqualified by score, recorded otherwise."""
+    from app.db.models import AuditLog
+    from app.leads import transition
+
+    seen_facts = []
+
+    class _LLM:
+        def __init__(self, scores):
+            self.scores = list(scores)
+
+        async def structured(self, step, system, user, schema):
+            seen_facts.append(user)
+            s = self.scores.pop(0)
+            return LLMResult(LeadScore(score=s, reason=f"score {s}"), "m", 100, 20, 0.0001)
+
+    roof = permit("R1", address="10 rue A", work=W.MAJOR_RENOVATION, description="Réfection de toiture")
+    condo = permit("N1", address="20 rue B")
+    deps.llm = _LLM([30, 85])
+    await ingest_permits(deps, RunHandle(0, "permits_ingest"), [roof, condo])
+
+    # The condo lead moves on (pretend research qualified it).
+    async with deps.sessionmaker() as s:
+        n1 = (await s.execute(select(Lead).where(Lead.source_ref == "N1"))).scalar_one()
+        moved = await transition(s, n1.id, "researched", expected_version=n1.version, actor="test")
+        await transition(s, n1.id, "qualified", expected_version=moved.version, actor="test")
+        await s.commit()
+
+    fitout = permit(
+        "R2",
+        address="10, rue A",
+        work=W.COMMERCIAL_FITOUT,
+        building=B.OFFICE,
+        description="Aménagement bureaux",
+    )
+    later = permit("N2", address="20 rue B", work=W.MAJOR_RENOVATION, description="Fenêtres")
+    deps.llm = _LLM([80])
+    run = RunHandle(0, "permits_ingest")
+    await ingest_permits(deps, run, [fitout, later, fitout, roof])
+    assert run.counts["rescored"] == 1 and run.counts["permits_added"] == 1 and run.counts["duplicates"] == 2
+    assert run.counts["scored"] == 1 and run.counts["above_threshold"] == 1
+
+    async with deps.sessionmaker() as s:
+        leads = {lead.source_ref: lead for lead in (await s.execute(select(Lead))).scalars()}
+        moves = (
+            (
+                await s.execute(
+                    select(AuditLog.details).where(
+                        AuditLog.action == "lead_status", AuditLog.entity_id == str(leads["R1"].id)
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    r1, n1 = leads["R1"], leads["N1"]
+    assert (r1.status, r1.score, r1.score_reason) == ("new", 80, "score 80")  # re-opened and re-scored
+    assert r1.source_details["permit_ids"] == ["R2"]
+    assert r1.source_details["other_permits"][0]["work"] == "commercial_fitout"
+    assert [(m["frm"], m["to"]) for m in moves] == [("new", "disqualified"), ("disqualified", "new")]
+    assert "other permit at this address" in seen_facts[-1] and "Aménagement bureaux" in seen_facts[-1]
+    assert "Réfection de toiture" in seen_facts[-1]  # the original permit is still the main facts
+    assert (n1.status, n1.score) == ("qualified", 85)  # further along: recorded, not re-scored
+    assert n1.source_details["permit_ids"] == ["N2"]
+
+
+async def test_disqualified_for_another_reason_is_not_reopened(deps):
+    from app.leads import transition
+
+    deps.llm = scripted_llm([90])
+    await ingest_permits(deps, RunHandle(0, "permits_ingest"), [permit("A", address="1 rue Z")])
+    async with deps.sessionmaker() as s:
+        a = (await s.execute(select(Lead).where(Lead.source_ref == "A"))).scalar_one()
+        await transition(
+            s, a.id, "disqualified", expected_version=a.version, actor="owner", reason="not our area"
+        )
+        await s.commit()
+    run = RunHandle(0, "permits_ingest")
+    await ingest_permits(deps, run, [permit("B", address="1 rue Z")])
+    assert run.counts["permits_added"] == 1 and "scored" not in run.counts
+    async with deps.sessionmaker() as s:
+        a = (await s.execute(select(Lead).where(Lead.source_ref == "A"))).scalar_one()
+    assert (a.status, a.score) == ("disqualified", 90)

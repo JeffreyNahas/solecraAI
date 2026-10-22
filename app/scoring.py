@@ -4,7 +4,9 @@ Uses the rubric in `app/skills/lead_scoring.md`. Input facts come from the permi
 free-text description is passed as quoted data (CLAUDE.md §2 rule 5).
 """
 
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -25,7 +27,7 @@ class LeadScore(BaseModel):
     reason: str = Field(max_length=300)
 
 
-def permit_facts(permit: Permit) -> str:
+def permit_facts(permit: Permit, other_permits: Sequence[dict[str, Any]] = ()) -> str:
     lines = [
         f"work: {permit.work.value} (city label: {permit.work_label or 'n/a'})",
         f"building: {permit.building.value} (city label: {permit.building_label or 'n/a'})",
@@ -37,9 +39,18 @@ def permit_facts(permit: Permit) -> str:
         lines.append(f"estimated_cost_cad: {permit.estimated_cost:.0f}")
     description = (permit.description or "").replace("<", " ").replace(">", " ")[:1000]
     lines.append(f"description: {description or 'none'}")
+    for other in other_permits:
+        other_desc = str(other.get("description") or "").replace("<", " ").replace(">", " ")[:300]
+        lines.append(
+            f"other permit at this address: issued {other.get('issued_on') or 'unknown'}, "
+            f"work {other.get('work')} ({other.get('work_label') or 'n/a'}), units {other.get('units')}, "
+            f"description: {other_desc or 'none'}"
+        )
     return "<permit>\n" + "\n".join(lines) + "\n</permit>"
 
 
-async def score_permit(llm: LLM, permit: Permit) -> LLMResult[LeadScore]:
+async def score_permit(
+    llm: LLM, permit: Permit, other_permits: Sequence[dict[str, Any]] = ()
+) -> LLMResult[LeadScore]:
     system = SYSTEM.format(rubric=RUBRIC_PATH.read_text())
-    return await llm.structured("lead_scoring", system, permit_facts(permit), LeadScore)
+    return await llm.structured("lead_scoring", system, permit_facts(permit, other_permits), LeadScore)

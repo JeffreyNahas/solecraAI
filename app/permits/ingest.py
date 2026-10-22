@@ -12,9 +12,9 @@ from collections.abc import Iterable
 
 from sqlalchemy import select, update
 
-from app.db.models import Lead, Run
+from app.db.models import AuditLog, Lead, Run
 from app.deps import Deps
-from app.leads import LeadIn, TransitionError, insert_lead, transition
+from app.leads import LeadIn, TransitionError, insert_lead, reopen, transition
 from app.llm import LLMError
 from app.permits.filters import reject_reason
 from app.permits.model import Permit
@@ -24,6 +24,7 @@ from app.scoring import score_permit
 log = logging.getLogger(__name__)
 
 SOURCE = "permit"
+MAX_OTHER_PERMITS = 10  # later permits kept on a lead (newest last)
 OVERLAP_DAYS = 14
 
 
@@ -47,10 +48,81 @@ async def ingest_permits(deps: Deps, run: RunHandle, permits: Iterable[Permit]) 
             run.add(f"filtered_{reason.split(':')[0]}")
             continue
         async with deps.sessionmaker() as session:
-            _, created = await insert_lead(session, to_lead(permit))
+            lead, created = await insert_lead(session, to_lead(permit))
+            outcome = "inserted" if created else await _add_permit_to_lead(session, deps, lead, permit)
             await session.commit()
-        run.add("inserted" if created else "duplicates")
+        run.add(outcome)
     await score_pending(deps, run)
+
+
+def _compact(permit: Permit) -> dict[str, object]:
+    return {
+        "permit_id": permit.permit_id,
+        "issued_on": permit.issued_on.isoformat() if permit.issued_on else None,
+        "work": permit.work.value,
+        "work_label": permit.work_label,
+        "building": permit.building.value,
+        "units": permit.units,
+        "description": (permit.description or "")[:300],
+    }
+
+
+async def _add_permit_to_lead(session, deps: Deps, lead: Lead, permit: Permit) -> str:
+    """Another permit at an address that already has a lead (decided 2026-10-22, #43).
+
+    The permit is recorded on the lead (`source_details.other_permits`). If the lead is still `new`,
+    or was disqualified only by its score, it is scored again with every permit at the address, so
+    e.g. a fit-out after a roof repair isn't lost. Leads further along keep the permit on record.
+    Returns the run counter to bump.
+    """
+    details = dict(lead.source_details or {})
+    known = {lead.source_ref, *details.get("permit_ids", [])}
+    if lead.source != SOURCE or permit.permit_id in known:
+        return "duplicates"
+    details["permit_ids"] = sorted((known - {lead.source_ref}) | {permit.permit_id})
+    details["other_permits"] = [*details.get("other_permits", []), _compact(permit)][-MAX_OTHER_PERMITS:]
+    disqualified_by_score = lead.status == "disqualified" and await _disqualified_by_score(session, lead.id)
+    rescore = lead.status == "new" or disqualified_by_score
+    values: dict[str, object] = {"source_details": details, "version": Lead.version + 1}
+    if rescore:
+        values.update(score=None, score_reason=None)
+    updated = await session.execute(
+        update(Lead)
+        .where(Lead.id == lead.id, Lead.version == lead.version)
+        .values(**values)
+        .returning(Lead.version)
+        .execution_options(synchronize_session=False)
+    )
+    if updated.scalar_one_or_none() is None:
+        return "permit_conflicts"
+    if disqualified_by_score:
+        await reopen(
+            session,
+            lead.id,
+            expected_version=lead.version + 1,
+            actor="system",
+            reason=f"new permit {permit.permit_id} at the same address",
+        )
+    return "rescored" if rescore else "permits_added"
+
+
+async def _disqualified_by_score(session, lead_id: int) -> bool:
+    """True if the lead's latest status change was the scoring step disqualifying it."""
+    last = (
+        await session.execute(
+            select(AuditLog.details)
+            .where(
+                AuditLog.action == "lead_status",
+                AuditLog.entity == "lead",
+                AuditLog.entity_id == str(lead_id),
+            )
+            .order_by(AuditLog.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return (
+        bool(last) and last.get("to") == "disqualified" and str(last.get("reason") or "").startswith("score ")
+    )
 
 
 async def score_pending(deps: Deps, run: RunHandle) -> None:
@@ -84,7 +156,9 @@ async def score_pending(deps: Deps, run: RunHandle) -> None:
     for lead in leads:
         permit = Permit.model_validate({**(lead.source_details or {}), "permit_id": lead.source_ref})
         try:
-            result = await score_permit(deps.llm, permit)
+            result = await score_permit(
+                deps.llm, permit, (lead.source_details or {}).get("other_permits", [])
+            )
         except LLMError as exc:
             log.exception("scoring failed for lead %s", lead.id)
             run.add("scoring_errors")

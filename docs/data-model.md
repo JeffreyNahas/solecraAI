@@ -76,7 +76,7 @@ Written for: owner sync, ignored non-owners, demo start, approval requested/deci
 | `language` | `fr` (default) or `en` — Bill 96, French first |
 | `consent_source_url`, `consent_captured_at`, `consent_role`, `relevance_note` | CASL consent evidence (step 10) |
 | `score_reason` | One line from the scoring step (why this score) |
-| `source_details` | Public facts from the source record (permit work/building type, units, issue date, description). **No address/coordinates/personal data** — those stay in their own columns |
+| `source_details` | Public facts from the source record (permit work/building type, units, issue date, description). Permits: later permits at the same address in `permit_ids` and `other_permits` (newest last, max 10). **No address/coordinates/personal data** — those stay in their own columns |
 | `owner_assigned` | Owner phone, optional (leads are shared) |
 | `email_domain`, `phone_normalized`, `address_normalized` | Dedupe keys, computed in `app/leads.py`, indexed |
 | `created_at`, `updated_at`, `version` | `version` +1 on every status change (optimistic locking) |
@@ -98,6 +98,8 @@ new → researched → qualified → drafted → approved → sent → follow_up
 any non-final → disqualified | no_valid_contact        any → do_not_contact        lost → replied
 ```
 Each transition: `UPDATE … WHERE id AND version AND status` (first writer wins), audited as `lead_status`.
+One way back from an exit: `app/leads.reopen` (`disqualified → new`, version-checked, audited), used
+only by the permits pipeline when a new permit arrives for a lead its score disqualified.
 
 ### `touches`
 `lead_id` FK (cascade), `direction` (`in`/`out`), `type` (`initial`/`follow_up`/`reply`/`owner_response`),
