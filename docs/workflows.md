@@ -18,7 +18,8 @@ Processes `inbound_messages` after the webhook has stored them.
 
 ```
 button tap  → parse "<action>:<approval_id>:<version>" → approval transition (below)
-text        → owner owes replacement text for an Edit?  → finish the edit
+            → edit_text / edit_ai                     → record how this owner will edit
+text        → owner owes an edit?                     → finish the edit
             → "test draft"                            → start approval_demo
             → "help" / "aide" / "?"                   → command list
             → anything else                           → "Echo: <text>"   (Gate 1 test mode)
@@ -37,6 +38,13 @@ other types → "I can only read text messages for now."
                                    └──────────┘
 ```
 
+Graphs are registered by approval `item_type` (`Handler.graphs`, a `GraphEntry` each). For items the
+AI can revise (`ai_edits=True`), Edit answers with two buttons, **My own text** (`edit_text`) and
+**Tell AI changes** (`edit_ai`); the choice is stored as `payload.edit_mode` (only for the owner who
+tapped Edit, same version), and text typed before choosing re-asks the choice. The edit decision is
+`{action: edited, mode: text|ai, text, approval_id, by, by_name}`. Another owner tapping while it's
+being edited gets `<name> is editing this draft.`
+
 Every transition is one SQL statement:
 `UPDATE approvals SET status=…, version=version+1 … WHERE id=:id AND status=:expected AND version=:v`.
 Only one tap can match, so **the first owner wins**. A losing tap gets
@@ -46,7 +54,24 @@ the graph instead.
 
 After a winning Approve/Reject (or the edit text), the handler resumes the graph:
 `graph.ainvoke(Command(resume=decision), {"configurable": {"thread_id": run_id}})`, then sets
-`resumed_at`.
+`resumed_at`. What happens depends on the graph's saved state (`graph.aget_state`):
+
+| Saved state | Action |
+|---|---|
+| Paused in an `interrupt()` whose value has **this** `approval_id` | Resume with the decision |
+| Stopped between steps, no pause (crash after the decision was delivered) | Continue the run with `ainvoke(None)`: no decision, so none can reach a later pause |
+| Finished, missing, or paused on a newer approval (edit loop) | Only mark delivered: resuming a missing thread would restart it from the beginning, and an old decision must never answer a newer approval |
+
+Every graph call for a run (start, state check + resume) holds that run's `asyncio.Lock`
+(`Handler._run_lock`). Owners' lanes run in parallel; without the lock, a tap that arrives while
+the other lane is still inside the step that sent the buttons would see the run as "stopped
+between steps" and run it twice. The API is a single process (CLAUDE.md §12), so an in-process
+lock is enough; graphs started by the scheduler (#47) must pause before their buttons go out.
+
+An edit decision carries the WhatsApp `message_id` that delivered it. If the resume fails after the
+edit was saved, the worker's retry of that same message finds the unresumed edit
+(`approvals.unresumed_edit_for_message`) and finishes the resume instead of treating the text as a
+new message. Choosing the edit mode is audited (`approval_edit_mode`).
 
 ## Graph: `approval_demo` (`app/graphs/approval_demo.py`)
 

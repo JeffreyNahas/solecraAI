@@ -63,7 +63,7 @@ Written for: owner sync, ignored non-owners, demo start, approval requested/deci
 | `approval:<id>:v<version>:ask:<phone>` | Approval request with buttons |
 | `approval:<id>:result:<phone>` | Final outcome of a demo approval |
 
-## Outreach tables (migrations `0002`, `0003`)
+## Outreach tables (migrations `0002`–`0005`)
 
 ### `leads`
 | Column | Notes |
@@ -76,6 +76,7 @@ Written for: owner sync, ignored non-owners, demo start, approval requested/deci
 | `language` | `fr` (default) or `en` — Bill 96, French first |
 | `consent_source_url`, `consent_captured_at`, `consent_role`, `relevance_note` | CASL consent evidence, set by the research step only when the consent check passes (`app/guards/consent.py`) |
 | `score_reason` | One line from the scoring step (why this score) |
+| `primary_lead_id` | FK to the lead of the same company that gets the email (one email per company); null on the primary itself |
 | `research_details` | Research step record (`app/jobs/lead_research.py`): `researched_at`, `attempts`, model, turns, searches, cost, tool calls, answer (no email/phone/name), `consent_check` with evidence (URL, fetch time, page hash, excerpt), `same_company_lead_ids`, `result` |
 | `source_details` | Public facts from the source record (permit work/building type, units, issue date, description). Permits: later permits at the same address in `permit_ids` and `other_permits` (newest last, max 10). **No address/coordinates/personal data** — those stay in their own columns |
 | `owner_assigned` | Owner phone, optional (leads are shared) |
@@ -105,7 +106,25 @@ only by the permits pipeline when a new permit arrives for a lead its score disq
 ### `touches`
 `lead_id` FK (cascade), `direction` (`in`/`out`), `type` (`initial`/`follow_up`/`reply`/`owner_response`),
 `gmail_message_id` (unique), `gmail_thread_id` (indexed — replies are matched by thread), `subject`,
-`body`, `sent_at`, `status` (`pending`/`sent`/`received`/`failed`). Used from step 12.
+`body`, `sent_at`, `status` (`pending`/`sent`/`received`/`failed`), `email_send_id` (FK to
+`email_sends`), `rfc_message_id` (for `In-Reply-To` on follow-ups). Used from step 12.
+
+### `email_drafts` (migration `0005`)
+The outreach email to one company. `lead_id` (primary lead) and `lead_ids` (all the company's leads),
+`run_id` (LangGraph thread), `kind` (`initial`; `follow_up` in step 13), `language`, `revision`,
+`author` (`ai`/`owner`), `subject`, `body` (current text), `status`
+(`drafting`/`pending`/`approved`/`rejected`/`blocked`/`expired`), `guard` (last output-guard result),
+`llm` (model, cost), `history` (earlier revisions). Partial unique index: **at most one open initial
+draft per lead** (`status` in `drafting`/`pending`/`approved`).
+
+### `email_sends` (migration `0005`)
+Gmail send queue, like `outbound_messages` for WhatsApp: the primary key is an **idempotency key**
+(e.g. `initial:<lead_id>:<mode>`), so an email is queued, and sent, at most once. `draft_id`,
+`revision`, `lead_id`, `mode` (`test`/`live`), `intended_to`, `actual_to`, `subject`, `rendered_text`,
+`content_sha256` (of the approved text, re-checked at send), `unsubscribe_token` (unique),
+`rfc_message_id` (unique), `status` (`queued`/`held`/`sending`/`sent`/`unknown`/`failed`/`cancelled`),
+`attempts`, `error`, `approved_by`, `gmail_message_id`, `gmail_thread_id`, `sent_at`. Lead and draft
+FKs are `SET NULL`: rows outlive a purged lead so unsubscribe links keep working ≥ 60 days (CASL).
 
 ### `suppression`
 `email_or_domain` PK (lowercase address or bare domain), `reason` (`unsubscribe`/`bounce`/`do_not_contact`),
@@ -120,3 +139,9 @@ called before every send. Entries are never removed by code. The audit log recor
 | Key | Value |
 |---|---|
 | `agent_issue:<job>` | `{"number": N}` — GitHub issue opened for that job's repeated failures |
+| `outreach_paused` | `true` stops drafting and sending (`app/settings_store.py`) |
+| `outreach_daily_cap` | New outreach emails per day; falls back to `OUTREACH_DAILY_CAP` |
+| `email_next_send_at` | ISO time: no outreach email before it (random spacing); read back as UTC if stored without an offset |
+
+Runtime settings are read and written with `app/settings_store.py`; every write is audited
+(`setting_changed`).

@@ -29,8 +29,9 @@ from app.db.audit import audit
 from app.db.models import InboundMessage, Owner
 from app.db.session import make_engine, make_sessionmaker
 from app.deps import Deps
+from app.graphs.approval_demo import ITEM_TYPE as DEMO_ITEM_TYPE
 from app.graphs.approval_demo import build_approval_demo
-from app.handlers import Handler
+from app.handlers import GraphEntry, Handler
 from app.owners import sync_owners
 from app.whatsapp.client import WhatsAppClient
 from app.whatsapp.parse import parse_webhook
@@ -66,7 +67,7 @@ def create_app(settings: Settings | None = None, channel: Channel | None = None)
         if channel is None:
             wa = WhatsAppClient(settings, sessionmaker)
         deps = Deps(settings=settings, sessionmaker=sessionmaker, channel=channel or wa)
-        handler = Handler(deps, build_approval_demo(deps, checkpointer))
+        handler = Handler(deps, {DEMO_ITEM_TYPE: GraphEntry(build_approval_demo(deps, checkpointer))})
         worker = Worker(sessionmaker, handler, settings.worker_poll_seconds, settings.worker_max_attempts)
 
         app.state.settings = settings
@@ -152,8 +153,10 @@ async def _store(app: FastAPI, messages: list) -> int:
                     attempts=0,
                 )
                 .on_conflict_do_nothing(index_elements=["message_id"])
+                .returning(InboundMessage.message_id)
             )
-            if result.rowcount == 0:
+            # RETURNING, not rowcount: rowcount is -1 for these inserts, so a duplicate would pass.
+            if result.scalar_one_or_none() is None:
                 log.info("duplicate message %s ignored", msg.message_id)
                 continue
             accepted += 1

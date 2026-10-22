@@ -59,6 +59,8 @@ async def test_text_processed_exactly_once(running_app, channel, caplog):
         await wait_idle(app)
     assert [m["body"] for m in channel.to(OWNER_1)] == ["Echo: bonjour"]
     assert sum("text from Alice: bonjour" in r.getMessage() for r in caplog.records) == 1
+    # The redeliveries are recognised as duplicates (they used to count as new: rowcount was -1).
+    assert sum("duplicate message wamid.DUP ignored" in r.getMessage() for r in caplog.records) == 2
 
 
 async def test_non_owner_ignored(running_app, channel):

@@ -1,11 +1,16 @@
-"""Approval button ids: "<action>:<approval_id>:<version>"."""
+"""Approval button ids: "<action>:<approval_id>:<version>".
+
+approve / edit / reject answer an approval. After Edit, items that the AI can revise offer a
+second choice: edit_text (the owner types the new text) or edit_ai (the owner says what to change).
+"""
 
 from typing import Literal
 
 from pydantic import BaseModel
 
-Action = Literal["approve", "edit", "reject"]
-ACTIONS: tuple[Action, ...] = ("approve", "edit", "reject")
+Action = Literal["approve", "edit", "reject", "edit_text", "edit_ai"]
+ACTIONS: tuple[Action, ...] = ("approve", "edit", "reject", "edit_text", "edit_ai")
+EDIT_MODES = {"edit_text": "text", "edit_ai": "ai"}
 
 
 class ButtonId(BaseModel):
@@ -35,4 +40,12 @@ def approval_buttons(approval_id: int, version: int) -> list[tuple[str, str]]:
         (ButtonId(action="approve", approval_id=approval_id, version=version).encode(), "Approve"),
         (ButtonId(action="edit", approval_id=approval_id, version=version).encode(), "Edit"),
         (ButtonId(action="reject", approval_id=approval_id, version=version).encode(), "Reject"),
+    ]
+
+
+def edit_mode_buttons(approval_id: int, version: int) -> list[tuple[str, str]]:
+    """Second step of Edit for items the AI can revise: owner's own text, or tell the AI."""
+    return [
+        (ButtonId(action="edit_text", approval_id=approval_id, version=version).encode(), "My own text"),
+        (ButtonId(action="edit_ai", approval_id=approval_id, version=version).encode(), "Tell AI changes"),
     ]

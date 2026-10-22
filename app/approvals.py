@@ -69,6 +69,44 @@ async def transition(
     return result.scalar_one_or_none()
 
 
+async def set_edit_mode(
+    session: AsyncSession, approval_id: int, *, owner_phone: str, version: int, mode: str
+) -> Approval | None:
+    """Record how the editing owner will edit ("text" or "ai"). Only the owner who tapped Edit,
+    and only while the approval is still in that editing state. None otherwise."""
+    result = await session.execute(
+        update(Approval)
+        .where(
+            Approval.id == approval_id,
+            Approval.status == "editing",
+            Approval.decided_by == owner_phone,
+            Approval.version == version,
+        )
+        .values(payload=Approval.payload.op("||")({"edit_mode": mode}))
+        .returning(Approval)
+        .execution_options(synchronize_session=False)
+    )
+    return result.scalar_one_or_none()
+
+
+async def unresumed_edit_for_message(
+    session: AsyncSession, owner_phone: str, message_id: str
+) -> Approval | None:
+    """The edit this exact WhatsApp message decided, if its resume never finished (the worker
+    retries the message after a failure; the approval is already `edited` by then)."""
+    result = await session.execute(
+        select(Approval)
+        .where(
+            Approval.status == "edited",
+            Approval.decided_by == owner_phone,
+            Approval.resumed_at.is_(None),
+            Approval.payload["decision"]["message_id"].astext == message_id,
+        )
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
 async def editing_for(session: AsyncSession, owner_phone: str) -> Approval | None:
     """The approval this owner tapped Edit on and still owes replacement text for."""
     result = await session.execute(

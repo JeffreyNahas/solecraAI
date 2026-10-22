@@ -107,6 +107,7 @@ Code lives at the repo root.
 │   ├── owners.py          # allowlist sync from OWNER_PHONES
 │   ├── leads.py           # lead dedupe + status transitions
 │   ├── suppression.py     # do-not-email list (CASL)
+│   ├── settings_store.py  # runtime settings (outreach paused, daily cap, next send time)
 │   ├── runs.py            # run tracking, owner alerts, [agent] GitHub issues
 │   ├── jobs/              # job registry; run with scripts/run_job.py
 │   ├── llm.py             # single OpenRouter client + model routing table
@@ -140,6 +141,12 @@ Code lives at the repo root.
   gmail_message_id, gmail_thread_id, subject, body, sent_at, status)`
 - `suppression(email_or_domain PK, reason[unsubscribe/bounce/do_not_contact], created_at)` —
   checked before every send, forever.
+- `email_drafts(id, lead_id, lead_ids, run_id, kind, language, revision, author, subject, body,
+  status, guard, llm, history)` — the email to one company; one open initial draft per lead.
+- `email_sends(idempotency_key PK, draft_id, lead_id, mode[test/live], intended_to, actual_to,
+  subject, rendered_text, content_sha256, unsubscribe_token, rfc_message_id, status, ...)` — Gmail
+  send queue, at most one send per key; kept ≥ 60 days for unsubscribe links.
+- `leads.primary_lead_id` — leads of the same company point to the one that gets the email.
 - `approvals(id, run_id, item_type, item_id, status[pending/editing/approved/edited/rejected],
   version, decided_by, decided_at, payload, resumed_at)`
 - `audit_log(id, actor, action, entity, entity_id, details, created_at)`
@@ -347,6 +354,8 @@ independent review (`/review-pr`) before Jeff merges. No size limit on PRs.
   reported searches under a different key than its docs; all mocked tests were green).
 - **A model-chosen value must never pick which checks run.** The consent guard skipped its name
   check when the page matched the model's own `website` claim (review of #45); check claims too.
+- **`rowcount` is -1 for `session.execute(insert(Model)...)`** (async SQLAlchemy + psycopg). Use
+  `.returning(...)` to know whether a row was written (webhook dedupe logic was silently skipped).
 - **Owners are processed in parallel.** Tests (and code) must not assume an order between messages
   from different owners.
 
@@ -394,3 +403,11 @@ independent review (`/review-pr`) before Jeff merges. No size limit on PRs.
   daily research spend cap $1.50 (configurable); free-mail addresses OK on a directory listing that
   names the business; personal addresses OK when the company publishes none (on a directory they
   are flagged `needs_owner_check` for the owners to confirm at approval).
+- **2026-10-22 (outreach emails, #10 → #46–#49):** v0 brand voice now, refined with owners (#9) before
+  real sends; emails signed **Carl Abi Yaghi, Solecra**; draft approvals go to **2 owners: Carl and
+  Ghassan**; weekdays 09:00–16:00 without Québec holidays, cap 15/day, 15–35 min random gaps; one
+  draft at a time on WhatsApp; Edit = own text (sent as written after the guard) or AI changes
+  (re-asked); Reject closes the lead; unsubscribe = address + company domain, one confirm click;
+  a company already emailed isn't emailed again for a new project; drafts expire after 2 business
+  days, consent re-checked if older than 30 days; numbers in emails only from an approved list;
+  test mode (allowlisted test addresses only) until step 7 and step 15 are done.

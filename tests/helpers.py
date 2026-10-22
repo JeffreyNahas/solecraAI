@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import func, select
 
 from app.db.models import InboundMessage
+from app.whatsapp.client import check_buttons, split_text
 
 FIXTURES = Path(__file__).parent / "fixtures"
 APP_SECRET = "test-app-secret"
@@ -48,10 +49,27 @@ class FakeChannel:
         self.keys: set[str] = set()
 
     async def send_text(self, to: str, body: str, key: str) -> str | None:
-        return self._record({"to": to, "body": body, "key": key, "type": "text"})
+        wa_id = None
+        for i, part in enumerate(split_text(body), start=1):
+            part_key = key if i == 1 else f"{key}:part{i}"
+            wa_id = self._record({"to": to, "body": part, "key": part_key, "type": "text"})
+        return wa_id
 
     async def send_buttons(self, to: str, body: str, buttons: list[tuple[str, str]], key: str) -> str | None:
+        check_buttons(body, buttons)  # same limits as the real client: never cut, refuse
         return self._record({"to": to, "body": body, "key": key, "type": "buttons", "buttons": buttons})
+
+    async def send_template(
+        self,
+        to: str,
+        name: str,
+        language: str,
+        params: list[str],
+        key: str,
+        button_payloads: list[str] | None = None,
+    ) -> str | None:
+        item = {"to": to, "key": key, "type": "template", "name": name, "language": language}
+        return self._record({**item, "params": params, "button_payloads": button_payloads or [], "body": ""})
 
     def _record(self, item: dict[str, Any]) -> str:
         if item["key"] not in self.keys:
