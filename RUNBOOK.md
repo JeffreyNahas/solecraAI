@@ -247,6 +247,20 @@ Run the Gate 1 checklist (section 4) against the server, using
 
 ---
 
+## 7b. Permits lead search (06:00 daily)
+
+Runs in the `scheduler` container. Needs `OPENROUTER_API_KEY` for scoring (without it, leads are
+inserted but not scored; they get scored on the next run that has a key).
+
+```bash
+docker compose exec scheduler python -m scripts.run_job permits_ingest      # run it now
+docker compose exec postgres psql -U solecra -c "select status, count(*), avg(score)::int from leads where source='permit' group by 1"
+docker compose exec postgres psql -U solecra -c "select counts from runs where job='permits_ingest' order by id desc limit 1"
+```
+Tuning (in `.env`, then `docker compose up -d scheduler`): `LEAD_SCORE_THRESHOLD`, `PERMITS_MAX_KM`,
+`PERMITS_MIN_UNITS`, `SCORING_MAX_PER_RUN`. If the city's site returns 403 for a while, its firewall
+is rate-limiting: the job retries with backoff and the next day's run catches up.
+
 ## 8. Job failure alerts and `[agent]` GitHub issues
 
 Every job run is recorded in the `runs` table. On failure, owners get one WhatsApp alert per failure

@@ -40,6 +40,8 @@ class Permit(BaseModel):
     building: BuildingCategory = BuildingCategory.UNKNOWN
     units: int | None = None
     description: str | None = None  # the city's free-text description of the work
+    work_label: str | None = None  # the city's own type label, kept for context (e.g. "Transformation")
+    building_label: str | None = None  # e.g. "Résidentiel / 5 à 11 Logements"
     latitude: float | None = None
     longitude: float | None = None
     estimated_cost: float | None = None

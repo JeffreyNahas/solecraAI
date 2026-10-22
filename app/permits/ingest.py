@@ -114,3 +114,26 @@ async def _apply_score(deps: Deps, run: RunHandle, lead: Lead, score: int, reaso
         else:
             run.add("above_threshold")
         await session.commit()
+
+
+async def permits_ingest_job(deps: Deps, run: RunHandle) -> None:
+    """Daily job: pull recent Montréal permits and turn the relevant ones into scored leads.
+
+    First run (no permit leads yet) looks back PERMITS_LOOKBACK_DAYS; later runs look back 14 days,
+    which covers the dataset's weekly publication with overlap (dedupe absorbs repeats).
+    """
+    from datetime import date, timedelta
+
+    from app.permits.montreal import MontrealPermitSource, to_permit
+
+    async with deps.sessionmaker() as session:
+        has_leads = (await session.execute(select(Lead.id).where(Lead.source == SOURCE).limit(1))).first()
+    days = 14 if has_leads else deps.settings.permits_lookback_days
+    since = date.today() - timedelta(days=days)
+    source = MontrealPermitSource()
+    try:
+        records = await source.fetch_since(since)
+    finally:
+        await source.aclose()
+    run.add("fetched", len(records))
+    await ingest_permits(deps, run, (to_permit(r) for r in records))

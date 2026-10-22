@@ -94,7 +94,7 @@ Jobs listed but not yet registered in `app/jobs.JOBS` are skipped with a warning
 
 | Job | When | Status |
 |---|---|---|
-| `permits_ingest` | 06:00 daily | pipeline built; registered once the Montréal client lands (#7) |
+| `permits_ingest` | 06:00 daily | Montréal permits → scored leads (`app/permits/`) |
 
 ## Permits → leads (`app/permits/`, `app/scoring.py`)
 ```
@@ -120,6 +120,22 @@ Run counts: `seen`, `filtered_out` (+ `filtered_work|building|units_below_min|to
 `inserted`, `duplicates`, `scored`, `scoring_errors`, `above_threshold`, `below_threshold`,
 `llm_tokens`, `llm_cost_microusd`.
 
+### Source: City of Montréal open data (`app/permits/montreal.py`)
+Dataset `permis-construction` (CC BY 4.0, published **weekly**), CKAN datastore resource
+`5232a72d-…`, queried with the SQL API (POST). Only `CO` (construction) and `TR` (transformation)
+are fetched; `CA` certificates and `DE` demolitions can't be leads. First run looks back
+`PERMITS_LOOKBACK_DAYS`, later runs 14 days (weekly publication + overlap; dedupe absorbs repeats).
+The city's firewall blocks bursts: one query per 1,000 rows, 2 s between pages, backoff 30 s / 2 min /
+5 min on 403/429/5xx, identifying User-Agent.
+
+Mapping (labels differ by borough): units are parsed as a **lower bound** from the building label
+(`"5 à 11 Logements"` → 5, `Multifamiliale`/`Condominium` → 4, `Multiplex` → 2), `nb_logements`
+used when larger. Work type from the city label + description keywords; plain transformations are
+`major_renovation` and the scoring step judges how major they are.
+
+Real dry run (2026-10-22, last 30 days): 1,045 fetched → 294 kept (157 multi-residential,
+110 commercial, 21 institutional, 6 office); dropped 410 < 4 units, 295 other buildings, 46 minor work.
+
 ## LLM calls (`app/llm.py`)
 One client for every model call: OpenRouter chat API, model per step in `routes()` (overridable by
 settings), fallbacks via OpenRouter `models`, strict JSON-schema structured output validated by a
@@ -127,5 +143,5 @@ Pydantic model (one retry with the validation error), timeouts and retries (3 tr
 zero data retention (`provider.data_collection=deny`, `zdr=true`), usage and cost returned to the caller.
 
 ## Planned (Phase 1)
-Montréal open-data client for permits (#7), research (#8), drafting and sending (#10), replies (#11),
+Research (#8), drafting and sending (#10), replies (#11),
 owner chat and digest (#12) — CLAUDE.md §7.

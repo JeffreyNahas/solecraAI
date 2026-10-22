@@ -141,14 +141,12 @@ async def test_scoring_respects_cap_and_missing_llm(deps):
 
 
 async def test_scheduler_skips_unregistered_and_uses_montreal_time(deps, monkeypatch):
-    sched = build_scheduler(deps)
-    assert sched.get_jobs() == []  # permits_ingest not registered until the city client lands
+    from app import scheduler as sched_mod
 
-    async def fake(deps, run):
-        return None
-
-    monkeypatch.setitem(JOBS, "permits_ingest", fake)
-    sched = build_scheduler(deps)
-    [job] = sched.get_jobs()
+    monkeypatch.setattr(
+        sched_mod, "SCHEDULE", [("not_built_yet", "0 7 * * *"), ("permits_ingest", "0 6 * * *")]
+    )
+    assert "permits_ingest" in JOBS
+    [job] = build_scheduler(deps).get_jobs()  # the unregistered one is skipped
     assert job.id == "permits_ingest" and str(job.trigger.timezone) == "America/Montreal"
     assert "hour='6'" in str(job.trigger) and "minute='0'" in str(job.trigger)

@@ -27,8 +27,8 @@ class LeadScore(BaseModel):
 
 def permit_facts(permit: Permit) -> str:
     lines = [
-        f"work: {permit.work.value}",
-        f"building: {permit.building.value}",
+        f"work: {permit.work.value} (city label: {permit.work_label or 'n/a'})",
+        f"building: {permit.building.value} (city label: {permit.building_label or 'n/a'})",
         f"units: {permit.units if permit.units is not None else 'unknown'}",
         f"borough: {permit.borough or 'unknown'}",
         f"issued: {permit.issued_on.isoformat() if permit.issued_on else 'unknown'}",
