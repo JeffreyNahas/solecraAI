@@ -201,7 +201,7 @@ class Touch(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
-DRAFT_STATUSES = ("drafting", "pending", "approved", "rejected", "blocked", "expired")
+DRAFT_STATUSES = ("drafting", "pending", "approved", "rejected", "blocked", "expired", "cancelled")
 SEND_STATUSES = ("queued", "held", "sending", "sent", "unknown", "failed", "cancelled")
 
 

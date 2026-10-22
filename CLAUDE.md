@@ -113,14 +113,16 @@ Code lives at the repo root.
 │   ├── llm.py             # single OpenRouter client + model routing table
 │   ├── scoring.py         # lead scoring step (cheap model + rubric)
 │   ├── research.py        # lead research step (agent loop: web search + fetch_page)
+│   ├── drafting.py        # outreach email drafting step (model + output guard + retry)
+│   ├── outreach/          # render (final email + CASL footer), present (drafts on WhatsApp), calendar
 │   ├── scheduler.py       # scheduler container: jobs on the Montréal timetable
 │   ├── permits/           # permit model, filters, permits → leads pipeline
 │   ├── whatsapp/          # signature check, parse, client (send_text, send_buttons), button ids
 │   ├── graphs/            # LangGraph workflows (approval_demo first, then outreach)
 │   ├── tools/             # github_issues, web (page fetcher); later gmail, calendar, sheets
-│   ├── guards/            # consent.py (CASL check of researched contacts); later output guard
+│   ├── guards/            # consent.py (CASL check of researched contacts), output.py (output guard)
 │   ├── db/                # models, session, audit helper, alembic migrations
-│   └── skills/            # lead_scoring.md, lead_research.md (v1); later brand_voice.md, casl_checklist.md
+│   └── skills/            # lead_scoring.md, lead_research.md (v1); brand_voice.md, casl_checklist.md (v0)
 ├── scripts/               # backup.sh, fake_webhook.py, check_docs.py, run_job.py
 └── tests/
     └── fixtures/          # webhook payloads (replace with real captures, see README there)
@@ -356,6 +358,12 @@ independent review (`/review-pr`) before Jeff merges. No size limit on PRs.
   check when the page matched the model's own `website` claim (review of #45); check claims too.
 - **`rowcount` is -1 for `session.execute(insert(Model)...)`** (async SQLAlchemy + psycopg). Use
   `.returning(...)` to know whether a row was written (webhook dedupe logic was silently skipped).
+- **A new model can change the API rules.** claude-sonnet-5.5 under zero data retention rejects
+  `temperature` (HTTP 404 "No endpoints found") and reasons by default (cost ×2.7, cut-off JSON);
+  live-check a model before routing a step to it (`Route.temperature=None`, `reasoning_effort`).
+- **Simulate a crash inside the step, after its side effect.** Failing the checkpointer's write didn't
+  stop LangGraph from finishing the run, so a "crash" test passed with the bug present (review of #51).
+  Make the node raise right after its commit, then check the re-run.
 - **Owners are processed in parallel.** Tests (and code) must not assume an order between messages
   from different owners.
 

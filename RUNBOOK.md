@@ -291,6 +291,25 @@ docker compose exec postgres psql -U solecra -c "select counts from runs where j
 Why a lead was rejected: `research_details->'consent_check'->>'reason'` (e.g. "email not published
 on the source page"). Cost per run: `counts->>'llm_cost_microusd'` (millionths of a dollar).
 
+## 7d. Outreach drafts (08:00, Québec business days)
+
+Before the first run, fill in `.env` (the job refuses to run without them): `COMPANY_SENDER_NAME`,
+`COMPANY_ADDRESS`, `COMPANY_PHONE`, `COMPANY_EMAIL`, `COMPANY_WEBSITE`, `PUBLIC_BASE_URL`, and
+`EMAIL_TEST_RECIPIENTS` (your own test inboxes). Keep `EMAIL_MODE=test`: approved emails to anyone
+else are **held**, never sent. Optional: `OUTREACH_ALLOWED_NUMBERS`, `OUTREACH_BLOCKED_TERMS`.
+
+Owners get "N email drafts are ready" (the `drafts_ready` template if they haven't written to the
+bot in 24 h; tap **Show drafts**), then one draft at a time: Approve / Edit / Reject. Typing
+`drafts` shows the current one again.
+
+```bash
+docker compose exec scheduler python -m scripts.run_job outreach_draft    # run it now (same daily cap)
+docker compose exec postgres psql -U solecra -c "select id, lead_id, status, revision, subject from email_drafts order by id desc limit 10"
+docker compose exec postgres psql -U solecra -c "select idempotency_key, status, intended_to, approved_by from email_sends order by created_at desc limit 10"
+```
+Pause all outreach: `insert into settings(key, value, updated_by) values ('outreach_paused', 'true', 'jeff') on conflict (key) do update set value='true';`
+Why a draft was blocked: `select guard from email_drafts where status='blocked'`.
+
 ## 8. Job failure alerts and `[agent]` GitHub issues
 
 Every job run is recorded in the `runs` table. On failure, owners get one WhatsApp alert per failure

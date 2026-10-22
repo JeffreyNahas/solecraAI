@@ -283,3 +283,19 @@ async def test_agent_search_budget_counts_refused_searches_once():
     assert result.searches == 4
     assert requests[0]["tools"][2]["parameters"]["max_uses"] == 4
     assert all(t["type"] == "function" for t in requests[1]["tools"])
+
+
+async def test_drafting_omits_temperature_scoring_keeps_it():
+    """Live 2026-10-22: no zero-retention provider of claude-sonnet-5.5 accepts `temperature`."""
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return _reply('{"score": 1, "reason": "x"}')
+
+    llm = _llm(handler)
+    await llm.structured("email_draft", "s", "u", Out)
+    await llm.structured("lead_scoring", "s", "u", Out)
+    assert "temperature" not in seen[0] and seen[0]["model"] == "anthropic/claude-sonnet-5.5"
+    assert seen[0]["reasoning"] == {"effort": "low"} and seen[0]["max_tokens"] == 2000
+    assert seen[1]["temperature"] == 0.0 and "reasoning" not in seen[1]

@@ -62,7 +62,9 @@ Outgoing messages are ordinary HTTPS calls from `api` to
 3. Open a psycopg pool and set up LangGraph's `AsyncPostgresSaver` (creates checkpoint tables).
 4. Build the WhatsApp client (or use an injected channel in tests), the graphs and the handler.
    Graphs are registered by the approval `item_type` they own (`{item_type: GraphEntry(graph)}`),
-   so a button tap or an edit is routed to the right graph.
+   so a button tap or an edit is routed to the right graph: `demo_draft` and `outreach_email` (with
+   AI edits, so the API also gets an LLM client). Owner commands `drafts` / `show_drafts` show the
+   current outreach draft.
 5. Start the worker: reset messages stuck in `processing`, resume approvals that were decided
    but never delivered to their graph, then start the processing loop.
 
@@ -93,7 +95,9 @@ Everything from the FastAPI route onward is identical.
 | `app/leads.py` | Lead dedupe and status transitions |
 | `app/suppression.py` | Do-not-email list |
 | `app/runs.py` | Run tracking, failure alerts |
-| `app/jobs/` | Job registry (`run_job`); `lead_research.py` (daily research job) |
+| `app/jobs/` | Job registry (`run_job`); `lead_research.py`, `outreach_draft.py` (daily jobs). `runtime.job_deps` also opens a LangGraph Postgres checkpointer for jobs that run graphs |
+| `app/drafting.py` | Outreach drafting step (model + guard + retry), owner-text parsing |
+| `app/outreach/` | `render.py` (final email + CASL footer), `present.py` (drafts on WhatsApp), `calendar.py` (Québec business days) |
 | `app/tools/` | Shared external APIs used across features (GitHub issues, `web.py` page fetcher; later Gmail, Calendar…). A source used by one feature lives with it (e.g. `app/permits/montreal.py`: client + mapping) |
 | `app/redact.py` | Strip emails/phones from outgoing technical text |
 | `app/llm.py` | The only way to call an LLM (OpenRouter) |

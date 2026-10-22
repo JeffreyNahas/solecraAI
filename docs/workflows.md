@@ -121,6 +121,7 @@ Jobs listed but not yet registered in `app/jobs.JOBS` are skipped with a warning
 |---|---|---|
 | `permits_ingest` | 06:00 daily | Montréal permits → scored leads (`app/permits/`) |
 | `lead_research` | 07:00 daily | Qualified leads → company + published contact + consent evidence (`app/jobs/lead_research.py`) |
+| `outreach_draft` | 08:00 weekdays (skips Québec holidays) | Qualified leads → one email draft per company → owners on WhatsApp (`app/jobs/outreach_draft.py`) |
 
 ## Permits → leads (`app/permits/`, `app/scoring.py`)
 ```
@@ -239,6 +240,11 @@ web-search request that names its model only in `models`), strict JSON-schema st
 Pydantic model (one retry with the validation error), timeouts and retries (3 tries on 408/429/5xx;
 a 429 waits until the rate-limit window resets, max 65 s), zero data retention (`provider.data_collection=deny`, `zdr=true`), usage and cost returned to the caller.
 
+Each route can omit `temperature` (`None`) and set `reasoning_effort`: `email_draft`
+(claude-sonnet-5.5) sends no temperature — no zero-retention provider accepts it — and
+`reasoning: {effort: low}` (reasoning can't be disabled; default reasoning cost ~2.7× more and
+cut off the JSON).
+
 `agent()` is the bounded tool loop: each turn is one model call with our function tools, a required
 `submit_answer` tool (arguments = the step's Pydantic model) and, while budget remains, OpenRouter's
 `openrouter:web_search` server tool (engine `exa`, `max_uses` = searches left). Searches are read from
@@ -247,6 +253,89 @@ includes refused, unbilled searches); once the budget is spent the tool is dropp
 answers go back to the model as tool messages; the last turn forces `submit_answer`; no valid answer
 → `LLMError` carrying the usage already billed. Returns data, turns, searches, cost and the tool calls.
 
+## Outreach drafts (`app/jobs/outreach_draft.py`, `app/graphs/outreach_email.py`, `app/drafting.py`)
+
+```
+08:00 job ─► per company: draft row + leads qualified→drafted ─► graph:
+  compose (AI + guard, 1 retry) ─► request_approval ─► wait (interrupt) ─► apply
+                                         ▲                                  │
+                                         └── AI changes / refused edit ─────┤
+         approve / own text OK → email_sends row (queued, or held in test mode) → END
+         reject → leads disqualified · expire → leads back to qualified → END
+```
+
+**08:00 job** (Québec business days; `app/outreach/calendar.py`), in order:
+1. Stop if `settings.outreach_paused`; fail (owners alerted) if the company identity is incomplete.
+2. **Expire** drafts undecided for `OUTREACH_DRAFT_EXPIRY_BUSINESS_DAYS` (2): pending ones counted
+   from when they were asked, ones an owner tapped Edit on but never finished from the Edit tap
+   (otherwise they'd block every other draft). Approval rejected by `system` with decision `expire`
+   (first action wins against an owner's tap), leads back to `qualified`.
+3. **Finish stuck runs**: drafts still `drafting`/`pending` > 10 min whose run isn't paused are
+   continued (`ainvoke(None)`) or started — except a run with an owner's decision not yet delivered
+   (the API delivers it; running it here too would run the same step twice). Then **release stale links**: a `qualified` lead linked
+   (`primary_lead_id`) to a lead that was never emailed (its draft expired, was rejected, blocked or
+   failed) is unlinked, so the company is grouped and drafted again with all its permits.
+4. **Pick** `qualified` leads with an email and consent URL, not linked to another lead:
+   suppressed → `do_not_contact`; consent older than `OUTREACH_CONSENT_MAX_AGE_DAYS` (30) re-checked
+   (`verify_consent`; failed → `no_valid_contact`, network error → another day). Grouped by company
+   (company email domain, or the address for free-mail). A company already emailed or in progress
+   (a lead in `drafted`…`won`/`lost`, or a non-cancelled `email_sends` row) isn't emailed again: the lead
+   gets `primary_lead_id` and is left out. Siblings in a group point to its best-scored lead.
+5. **Draft** up to the daily cap (`settings.outreach_daily_cap`, env `OUTREACH_DAILY_CAP`, minus drafts
+   made today): draft row (`lead_ids` = the company's leads), leads `qualified → drafted`, run
+   `outreach_email:<draft_id>` until it pauses. A model error marks the draft `blocked` and puts the
+   leads back.
+6. `present.morning`: owners are told how many drafts wait, then shown the first.
+
+**Graph nodes** (each safe to re-run after a crash; `wait` only calls `interrupt()`):
+- `compose`: `app/drafting.compose` — the model (route `email_draft`, Sonnet-class, reasoning effort
+  low) gets the playbooks `brand_voice.md` + `casl_checklist.md` and the lead facts in a `<lead>`
+  block (angle brackets stripped). Output `DraftEmail{subject, body}` → output guard; refused →
+  one retry with the violations; refused twice → draft `blocked`, leads back to `qualified`, owners
+  never see it.
+- `request_approval`: approval `item_type=outreach_email`, `item_id=<draft_id>`. Nothing is sent here.
+- `apply`:
+  - **Approve** → if the address was suppressed or the lead closed since drafting, draft `cancelled`
+    and nothing is queued; else render (`app/outreach/render.py`), final check (`check_rendered`), insert
+    `email_sends` keyed `initial:<primary lead>:<mode>` (ON CONFLICT DO NOTHING), draft `approved`,
+    leads `drafted → approved`, audit `outreach_queued`. In test mode (`EMAIL_MODE=test`) a recipient
+    outside `EMAIL_TEST_RECIPIENTS` is `held` (never sent). **The graph never sends email** (#49).
+  - **Own text** (`edit_text`): optional first line `Objet:`/`Subject:` replaces the subject, a
+    greeting line is dropped; guard OK → saved as a new revision (`author=owner`, old text in
+    `history`) and queued as written; refused → the owner is told why and the draft is re-asked.
+  - **AI changes** (`edit_ai`): `drafting.revise` with the owner's instruction → guard → new revision →
+    re-asked (new approval). Refused or model error → owner told, draft re-asked unchanged.
+  - **Reject** → draft `rejected`, leads `disqualified` (`owner_rejected`). **Expire** → draft
+    `expired`, leads back to `qualified`.
+
+**Showing drafts** (`app/outreach/present.py`): one at a time — the oldest pending outreach approval,
+to every owner whose 24 h window is open: a text with the research evidence (company, role, address
+of every permit, why, where the email was found, the company↔project page, the `needs_owner_check`
+excerpt when flagged) and the **whole email exactly as it will be sent** — greeting, signature and
+CASL footer, the unsubscribe link shown as `[unsubscribe link]` — split, never cut, then Approve / Edit /
+Reject (Approve reads "Approve (checked)" for flagged addresses). Nothing new is shown while an owner
+is editing; an approval whose draft is no longer pending is skipped (logged), never blocking the rest. Called after every decision (`GraphEntry.after_decision`), on the template's
+**Show drafts** button and on the `drafts` command. Morning: `drafts_ready` template for an owner
+whose window is closed, else a text. Message keys include approval id + version: never repeated.
+
+## Output guard (`app/guards/output.py`)
+`check_body(subject, body, ctx)` on every AI or owner text, `check_rendered` on the final email:
+
+| Blocked | Why |
+|---|---|
+| Numbers not in the facts given to the model (address, units, permit text) or `OUTREACH_ALLOWED_NUMBERS` | §2 rule 4 |
+| Price/cost words (`prix`, `coût`, `rabais`, `dollars`, `frais`, `taxes`, `$`, `%`, `price`, `fee`, `discount`…) | rule 3 |
+| Duration words (`minute`, `heure`, `jour`, `semaine`, `délai`, `day`, `week`…) | rule 3 (labour time) |
+| Measurements (`po`, `pouce`, `pied`, `cm`, `ft`, `36 x 48`, `²`…) | rule 3 |
+| `OUTREACH_BLOCKED_TERMS` (supplier / brand names) | rule 3 |
+| Links other than `COMPANY_WEBSITE` (any URL, `www.`, or bare domain such as `bit.ly/x`, `promo.xyz`), any email address | rule 5 (injected links), contact block is code's |
+| Placeholders/markup (`[`, `{`, `<`, `xxx`, `lorem`), greeting or sign-off in the body | code adds them |
+| Not the lead's language (function-word check on the body, and on the subject when it has telling words) | Bill 96 |
+| Subject > 90 or body < 40 / > 1,500 characters | |
+
+The final email must carry every identity field, the unsubscribe link and the List-Unsubscribe
+headers; otherwise nothing is queued (the run fails and alerts).
+
 ## Planned (Phase 1)
-Drafting and sending (#10), replies (#11), Langfuse tracing (#44),
+Unsubscribe page (#48), Gmail sending (#49), replies (#11), Langfuse tracing (#44),
 owner chat and digest (#12) — CLAUDE.md §7.

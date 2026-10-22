@@ -4,14 +4,14 @@ Status of each non-negotiable rule from CLAUDE.md §2: where it is enforced, or 
 
 | # | Rule | Status | Where |
 |---|---|---|---|
-| 1 | Owner approval before anything leaves / touches money | Mechanism built | `approvals` + `interrupt()`; nothing external is sent yet |
+| 1 | Owner approval before anything leaves / touches money | Mechanism built | `approvals` + `interrupt()`; an outreach email is only queued after an owner's Approve (or their own text); nothing is sent yet (#49) |
 | 2 | Least privilege (own tools, own DB role) | Planned | Separate DB roles when outreach/ERP land |
-| 3 | Estimate confidentiality + output guard | Planned | `app/guards/` (Phase 1 step 12, ERP in Phase 2) |
-| 4 | Never invent facts | Planned | Drafting prompts + output guard |
-| 5 | Untrusted input is data | Partly | Scoring: city description in `<permit>` tags, structured output, no tools. Research: page text in `<page>` blocks marked untrusted, angle brackets stripped; tools limited to search + `fetch_page`; the model's contact is only used if the code consent check passes (prompt-injection test in `tests/test_lead_research.py`; also passed live 3/3 with a planted page, 2026-10-22). Replies later |
+| 3 | Estimate confidentiality + output guard | Partly | Output guard on every outreach text (`app/guards/output.py`: costs, durations, measurements, supplier names); `estimates_internal` in Phase 2 |
+| 4 | Never invent facts | Partly | Outreach: only numbers present in the facts given to the model or the owners' approved list; claims limited by the brand-voice playbook; owners approve every email |
+| 5 | Untrusted input is data | Partly | Scoring: city description in `<permit>` tags, structured output, no tools. Research: page text in `<page>` blocks marked untrusted, angle brackets stripped; tools limited to search + `fetch_page`; the model's contact is only used if the code consent check passes (prompt-injection test in `tests/test_lead_research.py`; also passed live 3/3 with a planted page, 2026-10-22). Drafting: lead facts in a `<lead>` block, angle brackets stripped; the guard refuses links and email addresses the model might copy from them. Replies later |
 | 6 | Owner allowlist | **Enforced** | Webhook drops non-owners before storing (`app/main.py`); handler re-checks (`app/handlers.py`) |
-| 7 | CASL | Partly | Evidence capture + code check at research (`app/guards/consent.py`: published on the page, no "no solicitation" notice, company site or directory naming the business, suppression list; social networks and search-engine pages refused as sources); send-time checks (step 12) |
-| 8 | Bill 96, French first | Partly | Demo draft is French; `leads.language` defaults to `fr` |
+| 7 | CASL | Partly | Evidence capture + code check at research (`app/guards/consent.py`: published on the page, no "no solicitation" notice, company site or directory naming the business, suppression list; social networks and search-engine pages refused as sources); every email gets the CASL footer from code (sender on behalf of Solecra, address, phone, email, website, why you're receiving it — the role only from a fixed FR/EN label list, never research free text — unsubscribe link + List-Unsubscribe headers), checked before queueing and shown in full to owners at approval (`app/outreach/render.py`, `check_rendered`); unsubscribe page #48, send-time checks #49 |
+| 8 | Bill 96, French first | Partly | Drafts in `leads.language` (default `fr`); the guard refuses a text not in that language, owners' edits included |
 | 9 | Law 25 | Partly | Data hosted in Québec (OVHcloud BHS); non-owner messages not stored; retention job planned |
 | 10 | No secrets in repo | **Enforced** | `.env` git-ignored; `.env.example` has no values |
 | 11 | Idempotency | **Enforced** | `inbound_messages` PK, `outbound_messages` keys, versioned approvals |

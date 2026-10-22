@@ -113,8 +113,10 @@ only by the permits pipeline when a new permit arrives for a lead its score disq
 The outreach email to one company. `lead_id` (primary lead) and `lead_ids` (all the company's leads),
 `run_id` (LangGraph thread), `kind` (`initial`; `follow_up` in step 13), `language`, `revision`,
 `author` (`ai`/`owner`), `subject`, `body` (current text), `status`
-(`drafting`/`pending`/`approved`/`rejected`/`blocked`/`expired`), `guard` (last output-guard result),
-`llm` (model, cost), `history` (earlier revisions). Partial unique index: **at most one open initial
+(`drafting`/`pending`/`approved`/`rejected`/`blocked`/`expired`/`cancelled`), `guard` (last output-guard
+result), `llm` (model, cost), `history` (earlier revisions). Status meanings: `blocked` = the guard
+refused it twice or drafting failed (owners never saw it); `expired` = undecided for 2 business days;
+`cancelled` = approved after the address was suppressed or the lead closed, so nothing was queued. Partial unique index: **at most one open initial
 draft per lead** (`status` in `drafting`/`pending`/`approved`).
 
 ### `email_sends` (migration `0005`)

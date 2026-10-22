@@ -33,15 +33,22 @@ MAX_RATE_LIMIT_WAIT = 65.0
 @dataclass(frozen=True)
 class Route:
     model: str
-    temperature: float = 0.0
+    temperature: float | None = 0.0  # None = not sent (some models reject it, e.g. claude-sonnet-5.5)
     max_tokens: int = 400
+    reasoning_effort: str | None = None  # e.g. "low": less hidden reasoning, lower cost
 
 
 def routes(settings: Settings) -> dict[str, Route]:
-    """Model per step. Cheap models for bulk steps; stronger ones for client-facing drafting (later)."""
+    """Model per step. Cheap models for bulk steps; stronger ones for client-facing drafting."""
     return {
         "lead_scoring": Route(model=settings.llm_model_scoring, temperature=0.0, max_tokens=300),
         "lead_research": Route(model=settings.llm_model_research, temperature=0.0, max_tokens=1500),
+        # Live 2026-10-22 with claude-sonnet-5.5: no zero-retention provider accepts `temperature`
+        # (HTTP 404 "No endpoints found"); reasoning can't be disabled, and by default it used ~1,000
+        # tokens per draft (cut-off JSON at 900) — effort "low" uses none and costs ~2.7× less.
+        "email_draft": Route(
+            model=settings.llm_model_drafting, temperature=None, max_tokens=2000, reasoning_effort="low"
+        ),
     }
 
 
@@ -259,13 +266,16 @@ class LLM:
             "model": route.model,
             "models": [route.model, *self.settings.fallback_models()],
             "messages": messages,
-            "temperature": route.temperature,
             "max_tokens": route.max_tokens,
             # Zero data retention: never route to providers that store or train on prompts.
             "provider": {"data_collection": "deny", "zdr": True, "require_parameters": True},
             "usage": {"include": True},
             **extra,
         }
+        if route.temperature is not None:
+            payload["temperature"] = route.temperature
+        if route.reasoning_effort is not None:
+            payload["reasoning"] = {"effort": route.reasoning_effort}
         headers = {
             "Authorization": f"Bearer {self.settings.openrouter_api_key}",
             "X-Title": "Solecra agents",

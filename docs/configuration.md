@@ -19,6 +19,7 @@ All settings come from environment variables (`.env`, loaded by `app/config.py`)
 | `OPENROUTER_API_KEY` | — | All LLM calls (`app/llm.py`). Empty while leads wait = scoring/research runs fail and alert |
 | `LLM_MODEL_SCORING` | `anthropic/claude-haiku-4.5` | Model for lead scoring (cheap, high volume) |
 | `LLM_MODEL_RESEARCH` | `anthropic/claude-haiku-4.5` | Model for the lead research loop |
+| `LLM_MODEL_DRAFTING` | `anthropic/claude-sonnet-5.5` | Model for outreach email drafts and AI edits (client-facing: Sonnet-class) |
 | `LLM_FALLBACK_MODELS` | — | Comma-separated OpenRouter model ids tried if the main one fails |
 | `PERMITS_LOOKBACK_DAYS` | `30` | First permits pull goes back this far |
 | `PERMITS_MAX_KM` | `30` | Max distance from downtown Montréal |
@@ -29,6 +30,16 @@ All settings come from environment variables (`.env`, loaded by `app/config.py`)
 | `RESEARCH_MAX_TURNS` | `8` | Model turns per lead in the research loop |
 | `RESEARCH_MAX_SEARCHES` | `4` | Web searches per lead (Exa via OpenRouter, ≈ $0.007 each) |
 | `OUTREACH_DAILY_CAP` | `15` | New outreach emails per day (default; owners can change it at runtime: `settings.outreach_daily_cap`) |
+| `OUTREACH_DRAFT_EXPIRY_BUSINESS_DAYS` | `2` | Undecided drafts expire after this many Québec business days |
+| `OUTREACH_CONSENT_MAX_AGE_DAYS` | `30` | Consent evidence older than this is re-checked before drafting |
+| `OUTREACH_ALLOWED_NUMBERS` | — | Numbers emails may contain besides the lead's own facts (owners' approved list), comma-separated |
+| `OUTREACH_BLOCKED_TERMS` | — | Supplier / brand names emails must never contain, comma-separated |
+| `COMPANY_NAME` | `Solecra` | Company in the signature and CASL footer |
+| `COMPANY_SENDER_NAME` | — | Signs every email (decided: Carl Abi Yaghi) |
+| `COMPANY_ADDRESS`, `COMPANY_PHONE`, `COMPANY_EMAIL`, `COMPANY_WEBSITE` | — | CASL identification in every email; drafting refuses to run if any is empty. `COMPANY_WEBSITE` is the only link host allowed in emails |
+| `PUBLIC_BASE_URL` | — | https base of unsubscribe links (`<url>/u/<token>`): `https://bot.<domain>` once deployed |
+| `EMAIL_MODE` | `test` | `test`: only `EMAIL_TEST_RECIPIENTS` can ever receive outreach email, others are held. `live` needs steps 7 and 15 (#49) |
+| `EMAIL_TEST_RECIPIENTS` | — | Comma-separated test inboxes |
 | `RESEARCH_MAX_USD_PER_DAY` | `1.5` | Safety stop: research model + search spend per Montréal day (USD), checked before each lead |
 | `RUN_FAILURE_ISSUE_THRESHOLD` | `3` | Failures in a row before a GitHub issue is opened |
 | `GITHUB_ISSUES_TOKEN` | — | Fine-grained token, **Issues: read and write** on this repo only. Empty = reporter off |

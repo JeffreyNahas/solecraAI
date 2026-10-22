@@ -53,7 +53,16 @@ the AI can revise `edit_text` ("My own text") / `edit_ai` ("Tell AI changes"). E
 |---|---|---|---|
 | `drafts_ready` | `en_US` | `Good morning! {{1}} email drafts are ready for your review.` | Quick reply "Show drafts" (`show_drafts`) |
 
-Created in WhatsApp Manager (Utility category); approved by Meta before use.
+Created in WhatsApp Manager (Utility category); approved by Meta before use. Sent by
+`app/outreach/present.morning` to an owner whose 24 h window is closed; the button's payload
+(`show_drafts`) arrives as a button tap and shows the current draft.
+
+## Outreach draft messages (`app/outreach/present.py`)
+Per draft, to each owner with an open window: a text (evidence + the full email, split if long),
+then a buttons message "Send this email to <company> (<email>)?" with Approve (or
+"Approve (checked)" for a flagged directory address) / Edit / Reject. Keys:
+`approval:<id>:v<version>:detail:<phone>` and `…:ask:<phone>`; morning message
+`outreach:morning:<date>:<phone>`; edit results `approval:<id>:edit_result:<phone>`.
 
 ## 24-hour window
 Free-form messages (text, buttons) can only be sent within 24 h of the recipient's last message
