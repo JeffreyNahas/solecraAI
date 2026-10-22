@@ -338,6 +338,9 @@ independent review (`/review-pr`) before Jeff merges. No size limit on PRs.
   version (or isn't available) until a new session; verify agent changes in a fresh session.
 - **Prompts are not permissions.** Read-only roles must be enforced by tool lists and hooks; an
   agent refusing a forbidden command proves its manners, not the guard.
+- **Hooks in an agent's frontmatter are not applied** (2026-10). Enforce per-agent rules with a
+  project hook in `.claude/settings.json` that checks `agent_type` in the hook input, and test the
+  guard live with harmless off-allowlist commands (`whoami`), never by asking for forbidden ones.
 - **Owners are processed in parallel.** Tests (and code) must not assume an order between messages
   from different owners.
 
