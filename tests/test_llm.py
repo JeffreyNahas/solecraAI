@@ -50,6 +50,7 @@ async def test_structured_output_payload_and_usage():
     assert result.data == Out(score=72, reason="new condos")
     assert (result.prompt_tokens, result.completion_tokens, result.cost_usd) == (100, 20, 0.0001)
     body = seen[0]
+    assert body["model"] == "anthropic/claude-haiku-4.5"
     assert body["models"] == ["anthropic/claude-haiku-4.5", "a/fallback-1", "b/fallback-2"]
     assert body["provider"]["data_collection"] == "deny" and body["provider"]["zdr"] is True
     schema = body["response_format"]["json_schema"]
@@ -111,7 +112,7 @@ async def test_missing_key_fails_fast():
 
 # --- agent loop -------------------------------------------------------------------------------
 
-from app.llm import FINAL_TOOL, Tool, WebSearch  # noqa: E402
+from app.llm import FINAL_TOOL, Tool, WebSearch, _search_count  # noqa: E402
 
 
 class Args(BaseModel):
@@ -123,7 +124,8 @@ def _call(name: str, args: dict | str, call_id: str = "c1") -> dict:
     return {"id": call_id, "type": "function", "function": {"name": name, "arguments": raw}}
 
 
-def _turn(*calls: dict, searches: int = 0, content: str = "") -> httpx.Response:
+def _turn(*calls: dict, searches: int = 0, content: str = "", details: bool = False) -> httpx.Response:
+    key = "server_tool_use_details" if details else "server_tool_use"
     return httpx.Response(
         200,
         json={
@@ -133,7 +135,7 @@ def _turn(*calls: dict, searches: int = 0, content: str = "") -> httpx.Response:
                 "prompt_tokens": 100,
                 "completion_tokens": 10,
                 "cost": 0.001,
-                "server_tool_use": {"web_search_requests": searches},
+                key: {"web_search_requests": searches},
             },
         },
     )
@@ -242,3 +244,42 @@ async def test_agent_http_failure_keeps_billed_usage():
             "lead_research", "s", "u", Out, [_fetch_tool([])], max_turns=4
         )
     assert info.value.cost_usd == pytest.approx(0.001)
+
+
+@pytest.mark.parametrize(
+    ("usage", "allowed", "expected"),
+    [
+        # Live OpenRouter responses (2026-10-22) use server_tool_use_details.
+        ({"server_tool_use_details": {"web_search_requests": 3}}, 4, 3),
+        ({"server_tool_use": {"web_search_requests": 2}}, 4, 2),
+        # Searches asked for beyond max_uses are refused and not billed.
+        ({"server_tool_use_details": {"web_search_requests": 6}}, 4, 4),
+        ({"server_tool_use_details": {"web_search_requests": 2}}, 0, 0),
+        ({}, 4, 0),
+        ({"server_tool_use_details": {"web_search_requests": "x"}}, 4, 0),
+    ],
+)
+def test_search_count(usage, allowed, expected):
+    assert _search_count(usage, allowed) == expected
+
+
+async def test_agent_search_budget_counts_refused_searches_once():
+    """The model asks for more searches than allowed: the budget is spent, not overdrawn."""
+    requests = []
+    replies = iter(
+        [
+            _turn(_call("fetch_page", {"url": "https://a.ca"}), searches=6, details=True),
+            _turn(_call(FINAL_TOOL, {"score": 5, "reason": "none"})),
+        ]
+    )
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return next(replies)
+
+    result = await _llm(handler).agent(
+        "lead_research", "s", "u", Out, [_fetch_tool([])], max_turns=4, web_search=WebSearch(max_searches=4)
+    )
+    assert result.searches == 4
+    assert requests[0]["tools"][2]["parameters"]["max_uses"] == 4
+    assert all(t["type"] == "function" for t in requests[1]["tools"])

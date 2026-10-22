@@ -6,7 +6,7 @@ to their business role. The model only proposes a contact; this code re-fetches 
 itself and decides. Nothing the model or the page says can skip a check.
 
 A contact passes only if, on a fresh fetch of `source_url`:
-  1. the page loads and is not a social network;
+  1. the page loads and is not a social network or a search engine's page;
   2. the email is published on it (text or mailto link);
   3. there is no "no solicitation" notice;
   4. the page belongs to the business (its own website), or names the business (a directory);
@@ -21,7 +21,15 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.leads import FREE_MAIL_DOMAINS, email_domain
-from app.tools.web import EMAIL_RE, PageError, PageFetcher, host_of, is_blocked, same_site
+from app.tools.web import (
+    EMAIL_RE,
+    PageError,
+    PageFetcher,
+    host_of,
+    is_blocked,
+    is_search_engine,
+    same_site,
+)
 
 # Notices meaning "don't send us commercial messages" (FR/EN), compared without accents.
 NO_SOLICITATION = (
@@ -128,6 +136,8 @@ async def verify_consent(
         return ConsentCheck(False, "invalid email address")
     if is_blocked(source_url):
         return ConsentCheck(False, "source is a social network")
+    if is_search_engine(source_url):
+        return ConsentCheck(False, "source is a search engine page, not where the email was published")
     try:
         page = await fetcher.fetch(source_url)
     except PageError as exc:

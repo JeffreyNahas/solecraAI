@@ -152,6 +152,7 @@ async def test_consent_passes_on_directory_naming_the_business():
             "does not name",
         ),
         ({}, {"url": "https://www.facebook.com/habitatnord"}, "social network"),
+        ({}, {"url": "https://exa.ai/library/organization/w8f1dmq72x5"}, "search engine"),
         ({}, {"email": "not-an-email"}, "invalid email"),
     ],
 )

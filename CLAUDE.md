@@ -342,6 +342,9 @@ independent review (`/review-pr`) before Jeff merges. No size limit on PRs.
 - **Hooks in an agent's frontmatter are not applied** (2026-10). Enforce per-agent rules with a
   project hook in `.claude/settings.json` that checks `agent_type` in the hook input, and test the
   guard live with harmless off-allowlist commands (`whoami`), never by asking for forbidden ones.
+- **Mocks prove our code, not the API.** Check every new external API feature live once before
+  calling it done (2026-10: OpenRouter refused web search when the model was only in `models`, and
+  reported searches under a different key than its docs; all mocked tests were green).
 - **Owners are processed in parallel.** Tests (and code) must not assume an order between messages
   from different owners.
 

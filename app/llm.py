@@ -197,8 +197,10 @@ class LLM:
         for turn in range(1, max_turns + 1):
             last_turn = turn == max_turns
             request_tools: list[dict[str, Any]] = [*function_tools, final]
+            allowed = 0
             if web_search and searches < web_search.max_searches and not last_turn:
-                request_tools.append(_web_search_tool(web_search, web_search.max_searches - searches))
+                allowed = web_search.max_searches - searches
+                request_tools.append(_web_search_tool(web_search, allowed))
             extra: dict[str, Any] = {"tools": request_tools}
             if last_turn:
                 extra["tool_choice"] = {"type": "function", "function": {"name": FINAL_TOOL}}
@@ -210,7 +212,7 @@ class LLM:
             total_in += int(usage.get("prompt_tokens") or 0)
             total_out += int(usage.get("completion_tokens") or 0)
             total_cost += float(usage.get("cost") or 0.0)
-            searches += _search_count(usage)
+            searches += _search_count(usage, allowed)
             model = body.get("model") or model
             message = (body.get("choices") or [{}])[0].get("message") or {}
             calls = [c for c in message.get("tool_calls") or [] if c.get("type", "function") == "function"]
@@ -252,6 +254,9 @@ class LLM:
         self, route: Route, messages: list[dict[str, Any]], extra: dict[str, Any]
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
+            # `model` is required alongside `models`: OpenRouter rejects a web-search request
+            # (HTTP 400 "invalid request") that names its model only in the `models` list.
+            "model": route.model,
             "models": [route.model, *self.settings.fallback_models()],
             "messages": messages,
             "temperature": route.temperature,
@@ -319,13 +324,19 @@ def _web_search_tool(cfg: WebSearch, remaining: int) -> dict[str, Any]:
     }
 
 
-def _search_count(usage: dict[str, Any]) -> int:
-    """Web searches billed in one call (OpenRouter reports them under server_tool_use)."""
-    server = usage.get("server_tool_use") or {}
+def _search_count(usage: dict[str, Any], allowed: int) -> int:
+    """Web searches billed in one call.
+
+    OpenRouter reports searches under `server_tool_use_details` (docs say `server_tool_use`; both
+    are read). The count includes searches the model asked for after `max_uses` was reached, which
+    OpenRouter refuses and doesn't bill (checked live, 2026-10-22), so it is capped at `allowed`.
+    """
+    server = usage.get("server_tool_use_details") or usage.get("server_tool_use") or {}
     try:
-        return int(server.get("web_search_requests") or 0)
+        requested = int(server.get("web_search_requests") or 0)
     except (TypeError, ValueError):
         return 0
+    return min(requested, allowed)
 
 
 def _response_format(schema: type[BaseModel]) -> dict[str, Any]:

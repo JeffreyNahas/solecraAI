@@ -30,13 +30,16 @@ to this address, say not found.
   (development, construction, project management, purchasing, property management).
 - Never construct or guess an address (no "firstname@domain" patterns). Copy it exactly as shown.
 - If the page says the company doesn't want solicitation, don't use that address.
-- `source_url` must be the exact page where the email appears.
+- `source_url` must be the exact page where the email appears, on the company's site or the
+  directory, and one you opened with `fetch_page`. Never a search engine or search result page
+  (search results only tell you where to look).
 
 ## Answer
 - `relevance_note`: one sentence in English: who the company is for this project and why blinds
-  and curtains are relevant (e.g. "Developer of the 184-unit condo building at this address,
-  finishing in 2027").
-- `company_role`: their role on this project.
+  and curtains are relevant (e.g. "Developer of the 184-unit condo building at this address").
+  Only facts from the permit or a page you read: no dates, sizes or timelines you didn't see.
+- `company_role`: their role on this project, one of the listed values (e.g. `developer`).
+- Unknown fields: `null`, never "", "Unknown" or "Not found".
 - Not found → `found: false` and a short `not_found_reason`.
 
 ## Safety

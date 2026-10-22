@@ -161,9 +161,12 @@ new, score ≥ threshold ─► agent loop (search + fetch_page) ─► answer �
    Tools: OpenRouter web search (Exa, ≤ `RESEARCH_MAX_SEARCHES`) and `fetch_page`
    (`app/tools/web.py`); ≤ `RESEARCH_MAX_TURNS` model turns; must end with a `ResearchOutcome`.
    The permit address is sent (needed to search); page text is wrapped in `<page>` blocks,
-   angle brackets stripped, marked as untrusted data.
+   angle brackets stripped, marked as untrusted data. The answer is cleaned before validation:
+   blank or placeholder values ("Unknown", "Not found", "") → null; free-text roles mapped to the
+   role list ("Entrepreneur général" → `general_contractor`, unmatched → null).
 3. **Consent check** (`app/guards/consent.py`, code only): re-fetch `source_url` and require the
-   email on the page, no "no solicitation" notice, not a social network, the page is the company's
+   email on the page, no "no solicitation" notice, not a social network or a search engine's page
+   (`SEARCH_ENGINE_DOMAINS`: an index is not where the email was published), the page is the company's
    site or names the business, and a company-domain email matches the website's domain.
    Then the suppression list (`app/suppression.is_suppressed`).
 4. **Write** (version-checked, audited): passed → `new → researched → qualified` with email, phone,
@@ -191,13 +194,16 @@ identifying User-Agent. Returns text (scripts/styles removed), emails (incl. `[a
 
 ## LLM calls (`app/llm.py`)
 One client for every model call: OpenRouter chat API, model per step in `routes()` (overridable by
-settings), fallbacks via OpenRouter `models`, strict JSON-schema structured output validated by a
+settings), fallbacks via OpenRouter `models` (sent together with `model`: OpenRouter rejects a
+web-search request that names its model only in `models`), strict JSON-schema structured output validated by a
 Pydantic model (one retry with the validation error), timeouts and retries (3 tries on 408/429/5xx;
 a 429 waits until the rate-limit window resets, max 65 s), zero data retention (`provider.data_collection=deny`, `zdr=true`), usage and cost returned to the caller.
 
 `agent()` is the bounded tool loop: each turn is one model call with our function tools, a required
 `submit_answer` tool (arguments = the step's Pydantic model) and, while budget remains, OpenRouter's
-`openrouter:web_search` server tool (engine `exa`, `max_uses` = searches left). Tool errors and invalid
+`openrouter:web_search` server tool (engine `exa`, `max_uses` = searches left). Searches are read from
+`usage.server_tool_use_details.web_search_requests`, capped at that call's `max_uses` (the count
+includes refused, unbilled searches); once the budget is spent the tool is dropped. Tool errors and invalid
 answers go back to the model as tool messages; the last turn forces `submit_answer`; no valid answer
 → `LLMError` carrying the usage already billed. Returns data, turns, searches, cost and the tool calls.
 

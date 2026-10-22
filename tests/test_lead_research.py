@@ -262,3 +262,34 @@ async def test_job_registered_and_scheduled_at_seven(deps):
     scheduler = build_scheduler(deps)
     trigger = str(scheduler.get_job("lead_research").trigger)
     assert "hour='7'" in trigger and "minute='0'" in trigger
+
+
+def test_outcome_cleans_placeholders_and_loose_roles():
+    """Live run 2026-10-22: the model sent "" / "Unknown" for unknown fields and free-text roles."""
+    out = outcome(
+        business_name=" Unknown ",
+        website="Not found",
+        contact_name="",
+        contact_role="",
+        not_found_reason="",
+        company_role="Developer (Promoteur)",
+    )
+    assert (out.business_name, out.website, out.contact_name, out.contact_role) == (None, None, None, None)
+    assert out.not_found_reason is None and out.company_role == "developer"
+
+
+@pytest.mark.parametrize(
+    ("raw", "role"),
+    [
+        ("Entrepreneur général", "general_contractor"),
+        ("General Contractor", "general_contractor"),
+        ("gestionnaire immobilier", "property_manager"),
+        ("Interior designer", "interior_designer"),
+        ("Architecte", "architect"),
+        ("Propriétaire", "owner"),
+        ("property_manager", "property_manager"),
+        ("something else", None),
+    ],
+)
+def test_outcome_role_mapping(raw, role):
+    assert outcome(company_role=raw).company_role == role

@@ -45,6 +45,13 @@ BLOCKED_DOMAINS = frozenset(
     }
 )
 
+# Search engines and their page indexes: an email seen there was not published there, so such a
+# page is never accepted as consent evidence (app/guards/consent.py). Live run 2026-10-22: the
+# model cited an exa.ai index page as the source of an address.
+SEARCH_ENGINE_DOMAINS = frozenset(
+    {"exa.ai", "google.com", "google.ca", "bing.com", "duckduckgo.com", "search.yahoo.com", "perplexity.ai"}
+)
+
 EMAIL_RE = re.compile(r"[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}", re.IGNORECASE)
 # Common ways sites hide addresses from bots: "info [at] site [dot] com", "info(at)site.com".
 _AT_RE = re.compile(r"\s*[\[\(\{]\s*(?:at|arobase)\s*[\]\)\}]\s*", re.IGNORECASE)
@@ -87,6 +94,11 @@ def same_site(host: str, domain: str) -> bool:
 def is_blocked(url: str) -> bool:
     host = host_of(url)
     return any(same_site(host, d) for d in BLOCKED_DOMAINS)
+
+
+def is_search_engine(url: str) -> bool:
+    host = host_of(url)
+    return any(same_site(host, d) for d in SEARCH_ENGINE_DOMAINS)
 
 
 def find_emails(text: str) -> list[str]:

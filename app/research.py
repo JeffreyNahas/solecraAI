@@ -10,9 +10,9 @@ Page text reaches the model inside <page> blocks marked as untrusted data (CLAUD
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.config import Settings
 from app.llm import LLM, AgentResult, Tool, WebSearch
@@ -35,6 +35,19 @@ CompanyRole = Literal[
     "developer", "owner", "general_contractor", "property_manager", "architect", "interior_designer"
 ]
 
+# Live runs (2026-10-22) showed the model filling unknown fields with "" or "Unknown" instead of
+# null, and roles like "Developer (Promoteur)". Both are cleaned here so they are never stored
+# and don't cost a retry turn.
+PLACEHOLDERS = {"unknown", "not found", "none", "null", "n/a", "na", "-", "inconnu", "non trouvé"}
+ROLE_WORDS: list[tuple[str, tuple[str, ...]]] = [  # first match wins
+    ("developer", ("developer", "promoteur", "développeur")),
+    ("general_contractor", ("contractor", "entrepreneur")),
+    ("property_manager", ("property manag", "gestionnaire", "gestion immobili")),
+    ("interior_designer", ("interior", "intérieur")),
+    ("architect", ("architect",)),
+    ("owner", ("owner", "propriétaire")),
+]
+
 
 class ResearchOutcome(BaseModel):
     found: bool
@@ -48,6 +61,31 @@ class ResearchOutcome(BaseModel):
     source_url: str | None = Field(description="Exact page where the email is published")
     relevance_note: str | None = Field(description="One sentence: who they are for this project")
     not_found_reason: str | None = Field(description="If not found: why, in one sentence")
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _blank_to_none(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            value = value.strip()
+            if not value or value.lower() in PLACEHOLDERS:
+                return None
+        return value
+
+    @field_validator("company_role", mode="before")
+    @classmethod
+    def _loose_role(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        text = value.strip().lower()
+        if not text or text in PLACEHOLDERS:
+            return None
+        if text in get_args(CompanyRole):
+            return text
+        text = text.replace("_", " ")
+        for role, words in ROLE_WORDS:
+            if any(w in text for w in words):
+                return role
+        return None  # an unknown role is not worth a retry turn; the role is optional
 
 
 class FetchArgs(BaseModel):
