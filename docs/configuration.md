@@ -38,8 +38,12 @@ All settings come from environment variables (`.env`, loaded by `app/config.py`)
 | `COMPANY_SENDER_NAME` | — | Signs every email (decided: Carl Abi Yaghi) |
 | `COMPANY_ADDRESS`, `COMPANY_PHONE`, `COMPANY_EMAIL`, `COMPANY_WEBSITE` | — | CASL identification in every email; drafting refuses to run if any is empty. `COMPANY_WEBSITE` is the only link host allowed in emails |
 | `PUBLIC_BASE_URL` | — | https base of unsubscribe links (`<url>/u/<token>`): `https://bot.<domain>` once deployed |
-| `EMAIL_MODE` | `test` | `test`: only `EMAIL_TEST_RECIPIENTS` can ever receive outreach email, others are held. `live` needs steps 7 and 15 (#49) |
+| `EMAIL_MODE` | `test` | `test`: only `EMAIL_TEST_RECIPIENTS` can ever receive outreach email, others are held. `live` also needs the step-15 sign-off row, a permanent https `PUBLIC_BASE_URL` and the full identity (`app/outreach/golive.py`) |
 | `EMAIL_TEST_RECIPIENTS` | — | Comma-separated test inboxes |
+| `EMAIL_SEND_START_HOUR`, `EMAIL_SEND_END_HOUR` | `9`, `16` | Sending window, Montréal time (the schedule also only fires 09:00–15:55) |
+| `EMAIL_GAP_MIN_MINUTES`, `EMAIL_GAP_MAX_MINUTES` | `15`, `35` | Random wait between two emails |
+| `EMAIL_TEST_IGNORES_SCHEDULE` | `false` | Test mode only: send as soon as the job runs, any hour, no gap |
+| `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`, `GMAIL_SENDER` | — | Gmail sending. Put them in **`.env.gmail`** (git-ignored; read by the scheduler container only). Created by `python -m scripts.gmail_auth` |
 | `RESEARCH_MAX_USD_PER_DAY` | `1.5` | Safety stop: research model + search spend per Montréal day (USD), checked before each lead |
 | `RUN_FAILURE_ISSUE_THRESHOLD` | `3` | Failures in a row before a GitHub issue is opened |
 | `GITHUB_ISSUES_TOKEN` | — | Fine-grained token, **Issues: read and write** on this repo only. Empty = reporter off |

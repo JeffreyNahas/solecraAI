@@ -25,6 +25,8 @@ SCHEDULE: list[tuple[str, str]] = [
     ("permits_ingest", "0 6 * * *"),
     ("lead_research", "0 7 * * *"),
     ("outreach_draft", "0 8 * * 1-5"),  # weekdays; the job also skips Québec holidays
+    # One email per tick; the job enforces hours (09:00–16:00), holidays, the random gap and the cap.
+    ("email_send", "*/5 9-15 * * 1-5"),
 ]
 
 

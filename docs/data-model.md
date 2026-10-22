@@ -128,6 +128,11 @@ Gmail send queue, like `outbound_messages` for WhatsApp: the primary key is an *
 `attempts`, `error`, `approved_by`, `gmail_message_id`, `gmail_thread_id`, `sent_at`. Lead and draft
 FKs are `SET NULL`: rows outlive a purged lead so unsubscribe links keep working ≥ 60 days (CASL).
 
+Status flow: `queued`/`held` (written by the approval; `held` = test mode and recipient not on the list,
+never sent) → `sending` (claimed by `email_send`, attempts +1) → `sent` | `unknown` (doubtful, never
+retried) | `failed` | back to `queued` (certain failure, max 3). `cancelled` = unsubscribed or lead closed.
+`rfc_message_id` is set at claim time; `actual_to` = where it really went (equals `intended_to`).
+
 ### `suppression`
 `email_or_domain` PK (lowercase address or bare domain), `reason` (`unsubscribe`/`bounce`/`do_not_contact`),
 `created_at`. `app/suppression.is_suppressed(email)` checks the address **and** its domain; must be
@@ -141,6 +146,7 @@ called before every send. Entries are never removed by code. The audit log recor
 | Key | Value |
 |---|---|
 | `agent_issue:<job>` | `{"number": N}` — GitHub issue opened for that job's repeated failures |
+| `outreach_live` | `{"signed_off_by", "at"}`: step-15 compliance sign-off; live sending is refused without it (`app/outreach/golive.py`) |
 | `outreach_paused` | `true` stops drafting and sending (`app/settings_store.py`) |
 | `outreach_daily_cap` | New outreach emails per day; falls back to `OUTREACH_DAILY_CAP` |
 | `email_next_send_at` | ISO time: no outreach email before it (random spacing); read back as UTC if stored without an offset |

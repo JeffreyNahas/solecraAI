@@ -14,6 +14,7 @@ from app.deps import Deps
 from app.llm import LLM
 from app.owners import sync_owners
 from app.tools.github_issues import GitHubIssueReporter
+from app.tools.gmail import GmailClient
 from app.tools.web import PageFetcher
 from app.whatsapp.client import WhatsAppClient
 
@@ -27,6 +28,7 @@ async def job_deps(settings: Settings) -> AsyncIterator[Deps]:
     issues = GitHubIssueReporter(settings.github_issues_token, settings.github_repo, sessionmaker)
     llm = LLM(settings) if settings.openrouter_api_key else None
     web = PageFetcher()
+    gmail = GmailClient(settings)
     pool = AsyncConnectionPool(
         settings.database_url,
         kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
@@ -36,10 +38,11 @@ async def job_deps(settings: Settings) -> AsyncIterator[Deps]:
     checkpointer = AsyncPostgresSaver(pool)
     await checkpointer.setup()
     try:
-        yield Deps(settings, sessionmaker, wa, issues, llm, web, checkpointer)
+        yield Deps(settings, sessionmaker, wa, issues, llm, web, checkpointer, gmail)
     finally:
         await pool.close()
         await web.aclose()
+        await gmail.aclose()
         await wa.aclose()
         await issues.aclose()
         if llm:

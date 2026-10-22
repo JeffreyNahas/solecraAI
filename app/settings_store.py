@@ -17,6 +17,7 @@ from app.db.models import Setting
 OUTREACH_PAUSED = "outreach_paused"  # bool
 OUTREACH_DAILY_CAP = "outreach_daily_cap"  # int; falls back to OUTREACH_DAILY_CAP env
 EMAIL_NEXT_SEND_AT = "email_next_send_at"  # ISO datetime: no email before this
+OUTREACH_LIVE = "outreach_live"  # {"signed_off_by", "at"}: step 15 compliance sign-off; live sending needs it
 
 
 async def get_setting(session: AsyncSession, key: str, default: Any = None) -> Any:

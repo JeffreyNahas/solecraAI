@@ -352,6 +352,41 @@ it shows in the daily digest later (#12). The resume of closed drafts and the ow
 "Closed: the prospect unsubscribed." (or "nobody decided in time"). Any later lead of that company is moved to
 `do_not_contact` by the 08:00 job (suppression is checked first).
 
+## Sending (`app/jobs/email_send.py`, `app/tools/gmail.py`, `app/outreach/golive.py`)
+Job `email_send`, cron `*/5 9-15 * * 1-5` Montréal, **one email per run**. Nothing is sent unless an
+owner approved it (`email_sends` row `queued`, §2 rule 1).
+
+Run gates, in order: stuck `sending` rows → `unknown` (below); outside 09:00–16:00 / weekend / Québec
+holiday (`outside_hours`; test mode can skip this with `EMAIL_TEST_IGNORES_SCHEDULE`); paused;
+nothing queued for the current `EMAIL_MODE`; **live** mode needs `live_problems()` empty (`EMAIL_MODE=live`,
+the `settings.outreach_live` sign-off row written after step 15, a permanent https `PUBLIC_BASE_URL` —
+tunnels refused — and the full company identity), otherwise the job fails; random 15–35 min gap since
+the previous send (`settings.email_next_send_at`); daily cap (`outreach_daily_cap`, counting
+sent/sending/unknown today); Gmail connected.
+
+Claim (one transaction, the lead locked first and then the email row, the same order as the unsubscribe):
+`queued → sending` after re-checking that the lead is still `approved`, address **and** domain are not
+suppressed, consent evidence is present, `sha256(subject + text)` equals the approved hash, the
+unsubscribe link is in the text (live: on the current `PUBLIC_BASE_URL`) and `check_rendered` passes. An email
+that fails is `cancelled` (lead closed / suppressed / no consent) or `failed` (text changed, footer broken)
+and the job moves on to the next one. A last suppression look follows the claim, right before the call.
+`Message-ID` is generated at claim time (`<random@sender-domain>`) and stored in `rfc_message_id`.
+
+Gmail outcome (`app/tools/gmail.py` classifies; **one call per claim**):
+
+| Outcome | Email becomes | Then |
+|---|---|---|
+| 200 | `sent` + Gmail ids; a `touch` (out/initial, thread id); leads `approved → sent`; next send time set | — |
+| Could not connect, 429 / rate limit, token endpoint down | back to `queued` (attempts +1); `failed` after 3 | retried on a later tick |
+| Timeout after connecting, 5xx, dropped connection | `unknown`, **never retried** | job fails → owners alerted; check Gmail *Sent* |
+| 400 / other 4xx from Gmail | `failed` | job fails |
+| `invalid_grant`, 401 twice, 403 permission | stays `queued` (attempt not counted) | job fails: Jeff reconnects (`scripts/gmail_auth.py`) |
+| Recipient not in `EMAIL_TEST_RECIPIENTS` (test mode) | `held` | job fails |
+
+A row left `sending` for over 10 minutes (the process died around the call) becomes `unknown`. An
+`unknown` email never sends again by itself; its lead stays `approved`. Problem messages contain no addresses.
+The Gmail credentials (`GMAIL_*`, file `.env.gmail`) exist only in the scheduler container: the API's `Deps.gmail` is `None`.
+
 ## Output guard (`app/guards/output.py`)
 `check_body(subject, body, ctx)` on every AI or owner text, `check_rendered` on the final email:
 
@@ -371,5 +406,5 @@ The final email must carry every identity field, the unsubscribe link and the Li
 headers; otherwise nothing is queued (the run fails and alerts).
 
 ## Planned (Phase 1)
-Gmail sending (#49), replies (#11), Langfuse tracing (#44),
+Replies and follow-ups (#11), Langfuse tracing (#44),
 owner chat and digest (#12) — CLAUDE.md §7.

@@ -41,12 +41,19 @@ async def outreach_draft(deps: Deps, run: RunHandle) -> None:
     await outreach_draft_job(deps, run)
 
 
+async def email_send(deps: Deps, run: RunHandle) -> None:
+    from app.jobs.email_send import email_send_job
+
+    await email_send_job(deps, run)
+
+
 JOBS: dict[str, Job] = {
     "selftest_ok": selftest_ok,
     "selftest_fail": selftest_fail,
     "permits_ingest": permits_ingest,
     "lead_research": lead_research,
     "outreach_draft": outreach_draft,
+    "email_send": email_send,
 }
 
 

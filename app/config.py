@@ -13,7 +13,7 @@ def normalize_phone(raw: str) -> str:
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=(".env", ".env.gmail"), extra="ignore")
 
     # Postgres, e.g. postgresql://solecra:secret@postgres:5432/solecra
     database_url: str = "postgresql://solecra:solecra@localhost:5432/solecra"
@@ -76,6 +76,20 @@ class Settings(BaseSettings):
     # else are held. live needs step 7 + step 15 sign-off (checked by the sender, #49).
     email_mode: Literal["test", "live"] = "test"
     email_test_recipients: str = ""  # comma-separated
+    # Sending schedule (decided 2026-10-22): weekdays 09:00–16:00, 15–35 min random gap between emails.
+    email_send_start_hour: int = Field(default=9, ge=0, le=23)
+    email_send_end_hour: int = Field(default=16, ge=1, le=24)
+    email_gap_min_minutes: int = Field(default=15, ge=0)
+    email_gap_max_minutes: int = Field(default=35, ge=0)
+    # Test mode only: send as soon as the job runs (any hour, no gap) so the whole path can be tried.
+    email_test_ignores_schedule: bool = False
+
+    # Gmail sending (#49). Kept in .env.gmail, read by the scheduler container only (the API never
+    # sends email). Created by `python -m scripts.gmail_auth`.
+    gmail_client_id: str = ""
+    gmail_client_secret: str = ""
+    gmail_refresh_token: str = ""
+    gmail_sender: str = ""  # the Gmail address the emails are sent from
 
     # Run tracking: after this many failures in a row, open/update a GitHub issue.
     run_failure_issue_threshold: int = Field(default=3, ge=1)

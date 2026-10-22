@@ -32,6 +32,8 @@ JOB_LABELS: dict[str, str] = {
     "selftest_fail": "Self-test (forced failure)",
     "permits_ingest": "The morning building-permits lead search",
     "lead_research": "The morning lead research (finding company contacts)",
+    "outreach_draft": "The morning email drafting",
+    "email_send": "Sending approved emails",
 }
 
 
