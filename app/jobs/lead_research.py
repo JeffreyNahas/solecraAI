@@ -158,12 +158,22 @@ async def research_lead(deps: Deps, run: RunHandle, fetcher: PageFetcher, lead: 
         business_name=out.business_name,
         website=out.website,
     )
-    details["consent_check"] = {"ok": check.ok, "reason": check.reason, "evidence": check.evidence}
+    if check.retryable:
+        # The page didn't load for a passing reason (network, timeout, 5xx): try again another day.
+        details["last_error"] = f"consent check: {check.reason}"
+        run.add("consent_fetch_errors")
+        final = "no_valid_contact" if attempts >= MAX_ATTEMPTS else None
+        await _save(deps, run, lead, {"research_details": details}, final, reason=check.reason)
+        return
     async with deps.sessionmaker() as session:
         suppressed = check.ok and await is_suppressed(session, out.email)
         same_company = await _same_company(session, lead.id, out.email) if check.ok else []
     if same_company:
         details["same_company_lead_ids"] = same_company
+    evidence = dict(check.evidence)
+    if suppressed or not check.ok:
+        evidence.pop("excerpt", None)  # it contains the address, kept only for qualified leads
+    details["consent_check"] = {"ok": check.ok, "reason": check.reason, "evidence": evidence}
 
     if suppressed:
         details["result"] = "email or domain is on the do-not-contact list"

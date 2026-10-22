@@ -1,8 +1,12 @@
+import asyncio
+import http.server
+import threading
+
 import httpx
 import pytest
 
 from app.guards.consent import has_no_solicitation_notice, names_business, verify_consent
-from app.tools.web import PageError, PageFetcher, find_emails
+from app.tools.web import PageError, PageFetcher, find_emails, is_search_engine
 
 PUBLIC_IP = "151.101.1.1"
 
@@ -142,18 +146,49 @@ async def test_consent_passes_on_directory_naming_the_business():
             "no solicitation",
         ),
         (
-            {"https://habitatnord.ca/contact": "<p>Écrivez à contact@autre-firme.com</p>"},
+            {"https://habitatnord.ca/contact": "<h1>Groupe Habitat Nord</h1><p>contact@autre-firme.com</p>"},
             {"email": "contact@autre-firme.com"},
             "domain differs",
         ),
         (
             {"https://annuaire.example.ca/x": "<p>Condos Sud: info@habitatnord.ca</p>"},
             {"url": "https://annuaire.example.ca/x"},
-            "does not name",
+            "not named next to the email",
         ),
         ({}, {"url": "https://www.facebook.com/habitatnord"}, "social network"),
         ({}, {"url": "https://exa.ai/library/organization/w8f1dmq72x5"}, "search engine"),
         ({}, {"email": "not-an-email"}, "invalid email"),
+        # Review #45: the model picks `website`, so "own site" must still name the business.
+        # A: the model linked the project to the wrong firm and cites that firm's own contact page.
+        (
+            {"https://other-firm.com/contact": "<h1>Other Firm</h1><p>contact@other-firm.com</p>"},
+            {
+                "email": "contact@other-firm.com",
+                "url": "https://other-firm.com/contact",
+                "website": "https://other-firm.com",
+            },
+            "does not name",
+        ),
+        # B: a free-mail address on any page, with `website` set to that page's host.
+        (
+            {"https://random.example/p": "<p>Write to cheap.leads@gmail.com</p>"},
+            {
+                "email": "cheap.leads@gmail.com",
+                "url": "https://random.example/p",
+                "website": "https://random.example",
+            },
+            "does not name",
+        ),
+        # A directory listing many firms: the business is named, but far from the email used.
+        (
+            {
+                "https://annuaire.example.ca/liste": "<h2>Groupe Habitat Nord</h2><p>Promoteur.</p>"
+                + "<p>Autres membres du répertoire, entreprises et services de la région.</p>" * 8
+                + "<h2>Rénos Express</h2><p>renos.express@gmail.com</p>"
+            },
+            {"email": "renos.express@gmail.com", "url": "https://annuaire.example.ca/liste", "website": None},
+            "not named next to the email",
+        ),
     ],
 )
 async def test_consent_failures(pages, kwargs, reason):
@@ -171,3 +206,96 @@ async def test_consent_free_mail_allowed_only_when_published():
         name="Rénovations Tremblay",
     )
     assert result.ok and result.evidence["free_mail"] is True
+
+
+@pytest.mark.parametrize(
+    ("response", "retryable"),
+    [
+        (httpx.Response(503), True),
+        (httpx.Response(429), True),
+        (httpx.Response(403), False),
+        (httpx.Response(404), False),
+    ],
+)
+async def test_consent_fetch_errors_flag_passing_problems(response, retryable):
+    result = await check({"https://habitatnord.ca/contact": response})
+    assert not result.ok and "could not be checked" in result.reason and result.retryable is retryable
+
+
+async def test_network_error_is_retryable():
+    def handler(request):
+        raise httpx.ConnectError("reset")
+
+    f = PageFetcher(httpx.AsyncClient(transport=httpx.MockTransport(handler)), resolve=_public)
+    with pytest.raises(PageError) as exc:
+        await f.fetch("https://habitatnord.ca/")
+    assert exc.value.retryable
+
+
+async def _public(host: str) -> list[str]:
+    return [PUBLIC_IP]
+
+
+async def test_fetch_has_a_whole_page_deadline():
+    """A server that drip-feeds bytes can't hold the job: the whole page has a time limit."""
+
+    class Drip(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            while True:
+                yield b"<p>x</p>"
+                await asyncio.sleep(0.05)
+
+    def handler(request):
+        return httpx.Response(200, headers={"content-type": "text/html"}, stream=Drip())
+
+    f = PageFetcher(httpx.AsyncClient(transport=httpx.MockTransport(handler)), resolve=_public, deadline=0.3)
+    with pytest.raises(PageError, match="took more than") as exc:
+        await f.fetch("https://slow.example/")
+    assert exc.value.retryable
+
+
+async def test_fetch_refuses_internal_peer_after_connect(monkeypatch):
+    """DNS rebinding: the name passed the check, but the connection lands on an internal address."""
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("content-type", "text/html")
+            self.end_headers()
+            self.wfile.write(b"<p>metadata</p>")
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        f = PageFetcher(httpx.AsyncClient(trust_env=False), check_peer=True)
+
+        async def pretend_public(url: str) -> None:  # the DNS answer we checked was public...
+            return None
+
+        monkeypatch.setattr(f, "_check_url", pretend_public)
+        with pytest.raises(PageError, match="internal"):  # ...but the socket went to 127.0.0.1
+            await f.fetch(f"http://127.0.0.1:{server.server_port}/")
+        await f.aclose()
+    finally:
+        server.shutdown()
+
+
+async def test_meta_charset_is_used_when_the_header_has_none():
+    body = '<meta charset="iso-8859-1"><h1>Rénovations Côté</h1>'.encode("latin-1")
+
+    def handler(request):
+        return httpx.Response(200, headers={"content-type": "text/html"}, content=body)
+
+    f = PageFetcher(httpx.AsyncClient(transport=httpx.MockTransport(handler)), resolve=_public)
+    page = await f.fetch("https://reno.example/")
+    assert "Rénovations Côté" in page.text
+
+
+def test_sites_hosted_on_google_are_not_search_engines():
+    assert is_search_engine("https://www.google.com/maps/place/x")
+    assert is_search_engine("https://exa.ai/library/organization/x")
+    assert not is_search_engine("https://sites.google.com/view/renos-tremblay")

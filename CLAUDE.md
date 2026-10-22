@@ -345,6 +345,8 @@ independent review (`/review-pr`) before Jeff merges. No size limit on PRs.
 - **Mocks prove our code, not the API.** Check every new external API feature live once before
   calling it done (2026-10: OpenRouter refused web search when the model was only in `models`, and
   reported searches under a different key than its docs; all mocked tests were green).
+- **A model-chosen value must never pick which checks run.** The consent guard skipped its name
+  check when the page matched the model's own `website` claim (review of #45); check claims too.
 - **Owners are processed in parallel.** Tests (and code) must not assume an order between messages
   from different owners.
 

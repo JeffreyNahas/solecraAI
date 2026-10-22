@@ -30,17 +30,18 @@ Status of each non-negotiable rule from CLAUDE.md §2: where it is enforced, or 
   only — not the address/coordinate fields or contact data. The city's public description is sent
   as-is and can mention a civic number or business name (public record).
 
-- **Fetching the web** (`app/tools/web.py`): internal/private addresses refused on every hop
-  (protects the server's own network from model-chosen URLs); social networks never fetched.
-- **Research data:** an email is stored only when it passes the consent check; rejected or unverified
-  addresses are not kept anywhere (`research_details` drops them). Web search queries (permit
+- **Fetching the web** (`app/tools/web.py`): internal/private addresses refused on every hop and
+  again on the connected socket (DNS rebinding), which protects the server's own network and the
+  cloud metadata endpoint from model-chosen URLs; 30 s per page; social networks never fetched.
+- **Research data:** an email is stored only when it passes the consent check; rejected, suppressed or
+  unverified addresses are not kept anywhere (`research_details` drops them, page excerpt included). Web search queries (permit
   address + project facts, public record) go to Exa through OpenRouter.
 
 ## Known gaps
-- Page fetches resolve DNS then connect, so a host that changes its DNS answer in between could
-  still reach an internal address (DNS rebinding). Low risk on the VPS (nothing internal listens
-  beyond Docker's network); fix by pinning the resolved IP if research ever runs next to sensitive
-  services.
+- Behind an HTTP proxy (dev sandboxes only) the connected-address check is skipped: the proxy
+  resolves names itself. The production server uses no proxy.
+- Sites that hide emails with Cloudflare's anti-scraping encoding fail the consent check (decoding
+  it is close to address harvesting); revisit at the legal review (step 15).
 - robots.txt is not checked (a few pages per company, identifying User-Agent).
 - Owner message text is logged in full (fine for Gate 1; review before real client data flows).
 - WhatsApp access token lives in `.env` on the server; use a system-user token with minimal

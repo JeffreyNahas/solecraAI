@@ -171,31 +171,36 @@ new, score ≥ threshold ─► agent loop (search + fetch_page) ─► answer �
    role list ("Entrepreneur général" → `general_contractor`, unmatched → null).
 3. **Consent check** (`app/guards/consent.py`, code only): re-fetch `source_url` and require the
    email on the page, no "no solicitation" notice, not a social network or a search engine's page
-   (`SEARCH_ENGINE_DOMAINS`: an index is not where the email was published), the page is the company's
-   site or names the business, and a company-domain email matches the website's domain.
-   Then the suppression list (`app/suppression.is_suppressed`).
+   (`SEARCH_ENGINE_HOSTS`: an index is not where the email was published), the business named on
+   the page (anywhere on its own site, since the model chose `website`; within ±200 characters of
+   the email on a directory), and a company-domain email matching the website's domain.
+   Then the suppression list (`app/suppression.is_suppressed`). A fetch that fails for a passing
+   reason (network, timeout, 5xx, 408/429) is `retryable`: handled like an error in step 5.
 4. **Write** (version-checked, audited): passed → `new → researched → qualified` with email, phone,
    contact, `consent_*` columns; otherwise `no_valid_contact` (or `do_not_contact` if suppressed)
    **without the email** (Law 25: collect the minimum). Company name, website and relevance note are
    kept either way. Everything else goes to `leads.research_details`: model, turns, searches, cost,
    tool calls (final answer's arguments dropped), the answer without email/phone/name, the consent
-   check with evidence (final URL, fetch time, HTTP status, page title, SHA-256, excerpt around the
-   email), and `same_company_lead_ids` when another lead has the same email domain (one developer,
+   check with evidence (final URL, fetch time, HTTP status, page title, SHA-256; the excerpt around
+   the email only for qualified leads, since it contains the address), and `same_company_lead_ids` when another lead has the same email domain (one developer,
    several permits — drafting must send one email per company).
-5. **Errors** (model/API): the lead stays `new` and is retried another day; after 3 attempts →
-   `no_valid_contact`. If every picked lead errors (or no LLM key while leads wait), the run fails
+5. **Errors** (model/API, or a retryable consent fetch): the lead stays `new` and is retried another
+   day; after 3 attempts → `no_valid_contact`. Consent fetch errors are counted apart
+   (`consent_fetch_errors`) and never fail the run. If every picked lead errors (or no LLM key while leads wait), the run fails
    and owners are alerted.
 
 Run counts: `researched`, `qualified`, `not_found`, `consent_failed`, `suppressed`,
-`research_errors`, `research_conflicts`, `daily_cap_reached`, `daily_spend_cap_reached`,
+`research_errors`, `consent_fetch_errors`, `research_conflicts`, `daily_cap_reached`, `daily_spend_cap_reached`,
 `web_searches`, `llm_tokens`,
 `llm_cost_microusd`.
 
 ### Page fetcher (`app/tools/web.py`)
 The model chooses URLs, so the fetcher is the safety boundary: http(s) only; hosts resolving to
-private, loopback, link-local or reserved addresses refused (re-checked on each redirect, max 5);
-social networks refused; 15 s timeout, 2 MB cap, HTML/plain text only, no cookies or JavaScript,
-identifying User-Agent. Returns text (scripts/styles removed), emails (incl. `[at]`/`(dot)` and
+private, loopback, link-local or reserved addresses refused (re-checked on each redirect, max 5),
+and the address actually connected to is checked again (DNS rebinding; skipped behind an HTTP
+proxy, which resolves names itself); social networks refused; 15 s per read and 30 s per page,
+2 MB cap, HTML/plain text only, charset from the header or `<meta charset>`, no cookies or
+JavaScript, identifying User-Agent. Returns text (scripts/styles removed), emails (incl. `[at]`/`(dot)` and
 `mailto:`), links and a SHA-256 of the text.
 
 ## LLM calls (`app/llm.py`)

@@ -9,9 +9,13 @@ A contact passes only if, on a fresh fetch of `source_url`:
   1. the page loads and is not a social network or a search engine's page;
   2. the email is published on it (text or mailto link);
   3. there is no "no solicitation" notice;
-  4. the page belongs to the business (its own website), or names the business (a directory);
-  5. on the business's own website, a company-domain email matches that website's domain.
+  4. the page names the business: anywhere on its own website (which the model claims, so the
+     claim is checked too), or next to the email on a directory (a listing page names many firms);
+  5. a company-domain email matches the business's website domain.
 The caller also checks the suppression list (needs the database).
+
+A fetch that fails for a passing reason (network, timeout, 5xx) is marked `retryable`: the caller
+tries again another day instead of closing the lead.
 """
 
 import re
@@ -91,6 +95,7 @@ class ConsentCheck:
     ok: bool
     reason: str | None  # why it failed, in plain words (stored on the lead)
     evidence: dict[str, Any] = field(default_factory=dict)
+    retryable: bool = False  # the page couldn't be fetched for a passing reason
 
 
 def _plain(text: str) -> str:
@@ -141,7 +146,7 @@ async def verify_consent(
     try:
         page = await fetcher.fetch(source_url)
     except PageError as exc:
-        return ConsentCheck(False, f"source page could not be checked ({exc})")
+        return ConsentCheck(False, f"source page could not be checked ({exc})", retryable=exc.retryable)
 
     evidence: dict[str, Any] = {
         "url": source_url,
@@ -168,14 +173,15 @@ async def verify_consent(
     on_own_site = bool(site_host) and same_site(page_host, site_host)
     domain = email_domain(email)  # None for free-mail
     if on_own_site:
-        if domain and not same_site(domain, site_host) and not same_site(site_host, domain):
-            return fail("email domain differs from the company website")
+        # The model chose `website`: the page must still show it is this business's site.
+        if not names_business(page.title + "\n" + page.text, business_name):
+            return fail("source page does not name the business")
         evidence["source_type"] = "company_site"
     else:
-        if not names_business(page.text, business_name):
-            return fail("source page does not name the business")
-        if domain and site_host and not (same_site(domain, site_host) or same_site(site_host, domain)):
-            return fail("email domain differs from the company website")
+        if not names_business(evidence["excerpt"], business_name):
+            return fail("business not named next to the email on the source page")
         evidence["source_type"] = "directory"
+    if domain and site_host and not (same_site(domain, site_host) or same_site(site_host, domain)):
+        return fail("email domain differs from the company website")
     evidence["free_mail"] = email.rsplit("@", 1)[-1] in FREE_MAIL_DOMAINS
     return ConsentCheck(True, None, evidence)

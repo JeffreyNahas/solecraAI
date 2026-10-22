@@ -4,17 +4,22 @@ The model picks the URLs, so this module is the safety boundary:
 - http(s) only; hosts that resolve to private, loopback or other internal addresses are refused
   (checked again on every redirect);
 - social networks are refused (CLAUDE.md §7: never scrape Facebook or LinkedIn);
-- timeouts, a size cap and an identifying User-Agent; no cookies, no JavaScript.
+- the address actually connected to is checked too (a host can change its DNS answer between
+  our check and the connection: "DNS rebinding");
+- timeouts (per read and per page), a size cap and an identifying User-Agent; no cookies, no
+  JavaScript.
 
 Pages are returned as plain text plus the emails and links found on them. Page text is untrusted
 data (CLAUDE.md §2 rule 5): callers hand it to a model only inside a clearly marked data block.
 """
 
 import asyncio
+import codecs
 import hashlib
 import html
 import ipaddress
 import logging
+import os
 import re
 import socket
 from collections.abc import Awaitable, Callable
@@ -29,7 +34,9 @@ log = logging.getLogger(__name__)
 USER_AGENT = "SolecraAgents/1.0 (business contact research; github.com/JeffreyNahas/solecraAI)"
 MAX_BYTES = 2_000_000
 MAX_REDIRECTS = 5
-TIMEOUT = httpx.Timeout(15.0, connect=10.0)
+TIMEOUT = httpx.Timeout(15.0, connect=10.0)  # per connect / read
+PAGE_DEADLINE = 30.0  # whole page, redirects included: a server can't drip-feed for hours
+PROXY_ENV = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy")
 
 # Never fetched: social networks (no scraping, CLAUDE.md §7).
 BLOCKED_DOMAINS = frozenset(
@@ -47,10 +54,22 @@ BLOCKED_DOMAINS = frozenset(
 
 # Search engines and their page indexes: an email seen there was not published there, so such a
 # page is never accepted as consent evidence (app/guards/consent.py). Live run 2026-10-22: the
-# model cited an exa.ai index page as the source of an address.
-SEARCH_ENGINE_DOMAINS = frozenset(
-    {"exa.ai", "google.com", "google.ca", "bing.com", "duckduckgo.com", "search.yahoo.com", "perplexity.ai"}
+# model cited an exa.ai index page as the source of an address. Exact hosts (after "www."), so
+# sites hosted on e.g. sites.google.com still count as the company's own site.
+SEARCH_ENGINE_HOSTS = frozenset(
+    {
+        "exa.ai",
+        "google.com",
+        "google.ca",
+        "maps.google.com",
+        "maps.google.ca",
+        "bing.com",
+        "duckduckgo.com",
+        "search.yahoo.com",
+        "perplexity.ai",
+    }
 )
+_META_CHARSET_RE = re.compile(rb"""<meta[^>]+charset\s*=\s*["']?\s*([a-z0-9_\-]+)""", re.IGNORECASE)
 
 EMAIL_RE = re.compile(r"[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}", re.IGNORECASE)
 # Common ways sites hide addresses from bots: "info [at] site [dot] com", "info(at)site.com".
@@ -61,7 +80,14 @@ _BLOCK_TAGS = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6",
 
 
 class PageError(Exception):
-    """The page could not be fetched safely (blocked, internal address, too big, HTTP error...)."""
+    """The page could not be fetched safely (blocked, internal address, too big, HTTP error...).
+
+    `retryable`: a passing problem (network error, timeout, 5xx, 408/429) worth trying another day.
+    """
+
+    def __init__(self, message: str, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.retryable = retryable
 
 
 @dataclass
@@ -97,8 +123,7 @@ def is_blocked(url: str) -> bool:
 
 
 def is_search_engine(url: str) -> bool:
-    host = host_of(url)
-    return any(same_site(host, d) for d in SEARCH_ENGINE_DOMAINS)
+    return host_of(url) in SEARCH_ENGINE_HOSTS
 
 
 def find_emails(text: str) -> list[str]:
@@ -127,15 +152,30 @@ class PageFetcher:
         http: httpx.AsyncClient | None = None,
         resolve: Resolver = resolve_host,
         max_bytes: int = MAX_BYTES,
+        deadline: float = PAGE_DEADLINE,
+        check_peer: bool | None = None,
     ) -> None:
         self.http = http or httpx.AsyncClient(timeout=TIMEOUT, headers={"User-Agent": USER_AGENT})
         self.resolve = resolve
         self.max_bytes = max_bytes
+        self.deadline = deadline
+        # Behind an HTTP proxy we connect to the proxy, which resolves names itself: nothing to
+        # check here. The production server uses no proxy.
+        self.check_peer = (
+            (not any(os.environ.get(k) for k in PROXY_ENV)) if check_peer is None else check_peer
+        )
 
     async def aclose(self) -> None:
         await self.http.aclose()
 
     async def fetch(self, url: str) -> Page:
+        try:
+            async with asyncio.timeout(self.deadline):
+                return await self._fetch(url)
+        except TimeoutError as exc:
+            raise PageError(f"page took more than {self.deadline:.0f} s", retryable=True) from exc
+
+    async def _fetch(self, url: str) -> Page:
         current = url.strip()
         for _ in range(MAX_REDIRECTS + 1):
             await self._check_url(current)
@@ -143,21 +183,38 @@ class PageFetcher:
                 async with self.http.stream(
                     "GET", current, follow_redirects=False, headers={"User-Agent": USER_AGENT}
                 ) as resp:
+                    self._check_peer(resp)
                     if resp.is_redirect and (location := resp.headers.get("location")):
                         current = urljoin(current, location)
                         continue
                     if resp.status_code >= 400:
-                        raise PageError(f"HTTP {resp.status_code}")
+                        code = resp.status_code
+                        raise PageError(f"HTTP {code}", retryable=code >= 500 or code in (408, 429))
                     ctype = resp.headers.get("content-type", "").lower()
                     if ctype and not any(t in ctype for t in ("text/html", "text/plain", "xhtml")):
                         raise PageError(f"not a web page ({ctype.split(';')[0]})")
                     body = await self._read_capped(resp)
-                    encoding = resp.encoding or "utf-8"
+                    encoding = _charset(resp, body)
             except httpx.HTTPError as exc:
-                raise PageError(f"network error: {type(exc).__name__}") from exc
+                raise PageError(f"network error: {type(exc).__name__}", retryable=True) from exc
             raw = body.decode(encoding, errors="replace")
             return _parse(url, current, resp.status_code, raw, plain="text/plain" in ctype)
         raise PageError("too many redirects")
+
+    def _check_peer(self, resp: httpx.Response) -> None:
+        """Refuse the response if the connection went to an internal address (DNS rebinding)."""
+        if not self.check_peer:
+            return
+        stream = resp.extensions.get("network_stream")
+        peer = stream.get_extra_info("server_addr") if stream is not None else None
+        if not peer:
+            return  # test transports have no socket
+        try:
+            address = ipaddress.ip_address(str(peer[0]).split("%")[0])
+        except ValueError as exc:
+            raise PageError("unknown peer address") from exc
+        if not address.is_global:
+            raise PageError("internal or reserved address refused")
 
     async def _check_url(self, url: str) -> None:
         parts = urlsplit(url)
@@ -232,6 +289,20 @@ class _TextExtractor(HTMLParser):
         self.parts.append(data)
         if self._href:
             self._link_text.append(data)
+
+
+def _charset(resp: httpx.Response, body: bytes) -> str:
+    """Charset from the HTTP header, else from <meta charset> (older Québec sites use latin-1), else UTF-8."""
+    candidates = [resp.charset_encoding]
+    if match := _META_CHARSET_RE.search(body[:4096]):
+        candidates.append(match.group(1).decode("ascii", "ignore"))
+    for name in candidates:
+        if name:
+            try:
+                return codecs.lookup(name).name
+            except LookupError:
+                continue
+    return "utf-8"
 
 
 def _parse(url: str, final_url: str, status: int, raw: str, plain: bool = False) -> Page:

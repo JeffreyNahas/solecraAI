@@ -1,6 +1,7 @@
 import json
 from datetime import UTC, datetime, timedelta
 
+import httpx
 import pytest
 from sqlalchemy import select, update
 
@@ -165,6 +166,36 @@ async def test_suppressed_contact_becomes_do_not_contact(deps):
     run = await run_job(deps)
     lead = await get(deps, lead_id)
     assert lead.status == "do_not_contact" and lead.email is None and run.counts["suppressed"] == 1
+    assert "info@habitatnord.ca" not in json.dumps(lead.research_details)  # not even in the excerpt
+
+
+async def test_rejected_address_not_kept_anywhere(deps):
+    """Found on the page but refused (no-solicitation notice): no copy of it in the record."""
+    lead_id = await add_lead(deps, "P1", 90)
+    deps.web = fetcher({CONTACT: CONTACT_PAGE.replace("</body>", "<p>Pas de sollicitation.</p></body>")})
+    deps.llm = ScriptedAgent([outcome()])
+    await run_job(deps)
+    lead = await get(deps, lead_id)
+    assert lead.status == "no_valid_contact" and "no solicitation" in lead.research_details["result"]
+    assert "habitatnord.ca/contact" in lead.research_details["consent_check"]["evidence"]["url"]
+    assert "info@habitatnord.ca" not in json.dumps(lead.research_details)
+
+
+async def test_consent_page_down_retries_another_day(deps):
+    """A 503 on the consent re-fetch is passing: the lead stays new, then closes after 3 attempts."""
+    lead_id = await add_lead(deps, "P1", 90)
+    deps.web = fetcher({CONTACT: httpx.Response(503)})
+    for attempt in (1, 2, 3):
+        deps.llm = ScriptedAgent([outcome()])
+        run = await run_job(deps)  # does not fail the run: research itself worked
+        lead = await get(deps, lead_id)
+        assert run.counts["consent_fetch_errors"] == 1 and lead.research_details["attempts"] == attempt
+        assert "HTTP 503" in lead.research_details["last_error"]
+        assert lead.status == ("no_valid_contact" if attempt == 3 else "new") and lead.email is None
+        async with deps.sessionmaker() as session:  # "yesterday", so the daily cap allows a retry
+            row = await session.get(Lead, lead_id)
+            row.research_details = {**row.research_details, "researched_at": "2000-01-01T00:00:00+00:00"}
+            await session.commit()
 
 
 async def test_threshold_order_and_daily_cap(deps):
