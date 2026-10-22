@@ -24,6 +24,7 @@ log = logging.getLogger(__name__)
 SCHEDULE: list[tuple[str, str]] = [
     ("permits_ingest", "0 6 * * *"),
     ("lead_research", "0 7 * * *"),
+    ("outreach_draft", "0 8 * * 1-5"),  # weekdays; the job also skips Québec holidays
 ]
 
 

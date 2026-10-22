@@ -35,11 +35,18 @@ async def lead_research(deps: Deps, run: RunHandle) -> None:
     await lead_research_job(deps, run)
 
 
+async def outreach_draft(deps: Deps, run: RunHandle) -> None:
+    from app.jobs.outreach_draft import outreach_draft_job
+
+    await outreach_draft_job(deps, run)
+
+
 JOBS: dict[str, Job] = {
     "selftest_ok": selftest_ok,
     "selftest_fail": selftest_fail,
     "permits_ingest": permits_ingest,
     "lead_research": lead_research,
+    "outreach_draft": outreach_draft,
 }
 
 

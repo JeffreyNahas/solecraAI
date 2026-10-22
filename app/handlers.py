@@ -9,18 +9,17 @@ never run the same graph at once (the API is one process, CLAUDE.md §12).
 import asyncio
 import logging
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
-
-from langgraph.types import Command
 
 from app import approvals
 from app.db.audit import audit
 from app.db.models import Approval, InboundMessage, Owner
 from app.deps import Deps
 from app.graphs import approval_demo
+from app.graphs.resume import deliver
 from app.owners import get_owner
 from app.whatsapp.buttons import EDIT_MODES, edit_mode_buttons, parse_button_id
 
@@ -28,6 +27,7 @@ log = logging.getLogger(__name__)
 
 HELP_TEXT = (
     "Commands:\n"
+    "• drafts: show the next outreach email draft\n"
     "• test draft: start a demo approval\n"
     "• help: show this message\n"
     "Anything else is echoed back (Gate 1 test mode)."
@@ -47,12 +47,22 @@ class GraphEntry:
 
     graph: Any
     ai_edits: bool = False
+    # Called after a decision was delivered (e.g. show owners the next draft).
+    after_decision: Callable[[], Awaitable[None]] | None = None
 
 
 class Handler:
-    def __init__(self, deps: Deps, graphs: dict[str, GraphEntry]) -> None:
+    def __init__(
+        self,
+        deps: Deps,
+        graphs: dict[str, GraphEntry],
+        commands: dict[str, Callable[[Owner], Awaitable[None]]] | None = None,
+    ) -> None:
         self.deps = deps
         self.graphs = graphs
+        # Owner commands by exact text (lowercase) or template button payload, e.g. "drafts" /
+        # "show_drafts" → show the current outreach draft.
+        self.commands = commands or {}
         self._run_locks: dict[str, tuple[asyncio.Lock, int]] = {}  # run_id → (lock, users)
 
     @asynccontextmanager
@@ -97,6 +107,9 @@ class Handler:
     # --- buttons -----------------------------------------------------------
 
     async def _on_button(self, owner: Owner, msg: InboundMessage) -> None:
+        if msg.button_id in self.commands:  # template quick reply, e.g. "show_drafts"
+            await self.commands[msg.button_id](owner)
+            return
         button = parse_button_id(msg.button_id)
         if button is None:
             await self._reply(owner, msg, "Sorry, I didn't recognise that button.")
@@ -216,7 +229,9 @@ class Handler:
             return
 
         command = text.lower()
-        if command == "test draft":
+        if command in self.commands:
+            await self.commands[command](owner)
+        elif command == "test draft":
             await self._start_demo(owner)
         elif command in ("help", "aide", "?"):
             await self._reply(owner, msg, HELP_TEXT)
@@ -287,26 +302,13 @@ class Handler:
         if entry is None:
             log.error("no graph for approval %s (item_type %s)", approval.id, approval.item_type)
             return
-        config = {"configurable": {"thread_id": approval.run_id}}
         async with self._run_lock(approval.run_id):
-            state = await entry.graph.aget_state(config)
-            if _waiting_on(state, approval.id):
-                log.info("resuming run %s with %s", approval.run_id, decision["action"])
-                await entry.graph.ainvoke(Command(resume=decision), config)
-            elif state.next and not state.interrupts:
-                # Stopped between steps (crash after the decision was delivered, before the next
-                # pause): finish the run. No resume value, so no old decision can reach a later wait.
-                log.info("continuing interrupted run %s", approval.run_id)
-                await entry.graph.ainvoke(None, config)
-            else:
-                log.warning(
-                    "run %s is not waiting on approval %s; decision not delivered again",
-                    approval.run_id,
-                    approval.id,
-                )
-            async with self.deps.sessionmaker() as session:
-                await approvals.mark_resumed(session, approval.id)
-                await session.commit()
+            await deliver(entry.graph, self.deps.sessionmaker, approval)
+        if entry.after_decision is not None:
+            try:
+                await entry.after_decision()
+            except Exception:  # showing the next item must never undo a delivered decision
+                log.exception("after-decision hook failed for approval %s", approval.id)
 
     async def resume_unfinished(self) -> None:
         """At startup: resume graphs whose decision was saved but never delivered."""
@@ -320,12 +322,3 @@ class Handler:
 
     async def _reply(self, owner: Owner, msg: InboundMessage, text: str) -> None:
         await self.deps.channel.send_text(owner.phone, text, key=f"reply:{msg.message_id}")
-
-
-def _waiting_on(state: Any, approval_id: int) -> bool:
-    """True if the saved graph state is paused in an interrupt() for this approval."""
-    for interrupt in getattr(state, "interrupts", ()) or ():
-        value = getattr(interrupt, "value", None)
-        if isinstance(value, dict) and value.get("approval_id") == approval_id:
-            return True
-    return False

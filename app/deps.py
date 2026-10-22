@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -22,3 +22,4 @@ class Deps:
     issues: "GitHubIssueReporter | None" = None
     llm: "LLM | None" = None
     web: "PageFetcher | None" = None
+    checkpointer: Any = None  # LangGraph saver (Postgres) for processes that run graphs

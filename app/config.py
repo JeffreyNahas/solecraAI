@@ -1,6 +1,7 @@
 """Settings loaded from environment variables (see .env.example)."""
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -37,6 +38,7 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     llm_model_scoring: str = "anthropic/claude-haiku-4.5"
     llm_model_research: str = "anthropic/claude-haiku-4.5"
+    llm_model_drafting: str = "anthropic/claude-sonnet-5.5"  # client-facing text: Sonnet-class (§4)
     llm_fallback_models: str = ""  # comma-separated OpenRouter model ids, tried in order
 
     # Permits ingestion and scoring (step 9). Open decisions: keep configurable (CLAUDE.md §11).
@@ -53,6 +55,27 @@ class Settings(BaseSettings):
     research_max_searches: int = Field(default=4, ge=0)
     research_max_usd_per_day: float = Field(default=1.5, gt=0)  # LLM + search spend, Montréal day
     outreach_daily_cap: int = Field(default=15, ge=0)  # new outreach emails/day (owners can change it)
+    outreach_draft_expiry_business_days: int = Field(default=2, ge=1)
+    outreach_consent_max_age_days: int = Field(default=30, ge=1)  # older evidence is re-checked
+    # Numbers an email may contain besides the lead's own facts (owners' approved list), and names
+    # it must never contain (suppliers, brands). Comma-separated. CLAUDE.md §2 rules 3 and 4.
+    outreach_allowed_numbers: str = ""
+    outreach_blocked_terms: str = ""
+
+    # Company identity for every outreach email (CASL: who sends, on whose behalf, how to reach
+    # them). Values live in .env only. Sending refuses to run if any is empty.
+    company_name: str = "Solecra"
+    company_sender_name: str = ""
+    company_address: str = ""
+    company_phone: str = ""
+    company_email: str = ""
+    company_website: str = ""
+    # Public https base URL for unsubscribe links (step 7 domain; a tunnel URL in dev).
+    public_base_url: str = ""
+    # test: only EMAIL_TEST_RECIPIENTS can ever receive outreach email; approved emails to anyone
+    # else are held. live needs step 7 + step 15 sign-off (checked by the sender, #49).
+    email_mode: Literal["test", "live"] = "test"
+    email_test_recipients: str = ""  # comma-separated
 
     # Run tracking: after this many failures in a row, open/update a GitHub issue.
     run_failure_issue_threshold: int = Field(default=3, ge=1)
@@ -70,6 +93,15 @@ class Settings(BaseSettings):
     def _strip_driver(cls, v: str) -> str:
         # Accept either form; we store the plain libpq URL.
         return v.replace("postgresql+psycopg://", "postgresql://")
+
+    def test_recipients(self) -> set[str]:
+        return {e.strip().lower() for e in self.email_test_recipients.split(",") if e.strip()}
+
+    def allowed_numbers(self) -> set[str]:
+        return {n.strip() for n in self.outreach_allowed_numbers.split(",") if n.strip()}
+
+    def blocked_terms(self) -> list[str]:
+        return [t.strip() for t in self.outreach_blocked_terms.split(",") if t.strip()]
 
     def fallback_models(self) -> list[str]:
         return [m.strip() for m in self.llm_fallback_models.split(",") if m.strip()]

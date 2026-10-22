@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import PlainTextResponse
@@ -31,7 +32,11 @@ from app.db.session import make_engine, make_sessionmaker
 from app.deps import Deps
 from app.graphs.approval_demo import ITEM_TYPE as DEMO_ITEM_TYPE
 from app.graphs.approval_demo import build_approval_demo
+from app.graphs.outreach_email import ITEM_TYPE as OUTREACH_ITEM_TYPE
+from app.graphs.outreach_email import build_outreach_graph
 from app.handlers import GraphEntry, Handler
+from app.llm import LLM
+from app.outreach import present
 from app.owners import sync_owners
 from app.whatsapp.client import WhatsAppClient
 from app.whatsapp.parse import parse_webhook
@@ -66,8 +71,34 @@ def create_app(settings: Settings | None = None, channel: Channel | None = None)
         wa = None
         if channel is None:
             wa = WhatsAppClient(settings, sessionmaker)
-        deps = Deps(settings=settings, sessionmaker=sessionmaker, channel=channel or wa)
-        handler = Handler(deps, {DEMO_ITEM_TYPE: GraphEntry(build_approval_demo(deps, checkpointer))})
+        llm = LLM(settings) if settings.openrouter_api_key else None  # AI edits of drafts
+        deps = Deps(
+            settings=settings,
+            sessionmaker=sessionmaker,
+            channel=channel or wa,
+            llm=llm,
+            checkpointer=checkpointer,
+        )
+
+        async def show_drafts(owner: Owner) -> None:
+            if await present.present_next(deps, only_phone=owner.phone) is None:
+                await deps.channel.send_text(
+                    owner.phone, "No email drafts waiting.", key=f"drafts:none:{uuid4()}"
+                )
+
+        async def next_draft() -> None:
+            await present.present_next(deps)
+
+        handler = Handler(
+            deps,
+            {
+                DEMO_ITEM_TYPE: GraphEntry(build_approval_demo(deps, checkpointer)),
+                OUTREACH_ITEM_TYPE: GraphEntry(
+                    build_outreach_graph(deps, checkpointer), ai_edits=True, after_decision=next_draft
+                ),
+            },
+            commands={"drafts": show_drafts, present.SHOW_DRAFTS: show_drafts},
+        )
         worker = Worker(sessionmaker, handler, settings.worker_poll_seconds, settings.worker_max_attempts)
 
         app.state.settings = settings
@@ -82,6 +113,8 @@ def create_app(settings: Settings | None = None, channel: Channel | None = None)
             await worker.stop()
             if wa:
                 await wa.aclose()
+            if llm:
+                await llm.aclose()
             await pool.close()
             await engine.dispose()
 
