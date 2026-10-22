@@ -56,6 +56,11 @@ class OutreachState(TypedDict, total=False):
     outcome: str
 
 
+def company_role(lead: Lead) -> str | None:
+    """The research step's role from its fixed list (never the free-text job title)."""
+    return ((lead.research_details or {}).get("answer") or {}).get("company_role")
+
+
 def run_id_for(draft_id: int) -> str:
     return f"{ITEM_TYPE}:{draft_id}"
 
@@ -176,7 +181,7 @@ def build_outreach_graph(deps: Deps, checkpointer: BaseCheckpointSaver):
             language=draft.language,
             contact_name=primary.contact_name,
             consent_source_url=primary.consent_source_url,
-            consent_role=primary.consent_role,
+            consent_role=company_role(primary),
             identity=identity,
             unsubscribe_token=token,
         )
@@ -224,6 +229,7 @@ def build_outreach_graph(deps: Deps, checkpointer: BaseCheckpointSaver):
                     status=status,
                 )
             await session.commit()
+        log.info("draft %s queued as %s (%s)", draft.id, key, status or "already queued")
         return {"next": "end", "outcome": status or "already_queued"}
 
     async def apply_edit(
@@ -231,8 +237,10 @@ def build_outreach_graph(deps: Deps, checkpointer: BaseCheckpointSaver):
     ) -> OutreachState:
         already = any(h.get("approval_id") == approval_id for h in draft.history or [])
         if already:  # re-run after a crash: the edit was saved, continue from it
-            done = draft.author == "owner" and draft.status == "pending"
-            return await queue_send(draft, leads, decision) if done else {"next": "ask"}
+            # Own text saved (maybe even queued: queue_send is idempotent) → finish queueing it.
+            if draft.author == "owner" and draft.status in ("pending", "approved"):
+                return await queue_send(draft, leads, decision)
+            return {"next": "ask"}
 
         ctx = context_for(deps, draft, leads)
         mode = decision.get("mode", "text")

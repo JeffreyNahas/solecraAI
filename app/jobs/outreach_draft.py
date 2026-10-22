@@ -21,6 +21,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import false, func, or_, select, update
+from sqlalchemy.orm import aliased
 
 from app import approvals
 from app.db.audit import audit
@@ -52,6 +53,7 @@ CONTACTED = (
     "replied",
     "site_visit_booked",
     "won",
+    "lost",
 )
 STUCK_AFTER = timedelta(minutes=10)
 
@@ -77,6 +79,7 @@ async def outreach_draft_job(deps: Deps, run: RunHandle, now: datetime | None = 
 
     await expire_stale(deps, graph, run, now_local)
     await finish_stuck(deps, graph, run)
+    await unlink_stale(deps, run)
 
     midnight = now_local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(UTC)
     async with deps.sessionmaker() as session:
@@ -101,25 +104,30 @@ async def outreach_draft_job(deps: Deps, run: RunHandle, now: datetime | None = 
 
 
 async def expire_stale(deps: Deps, graph: Any, run: RunHandle, now_local: datetime) -> None:
+    """Undecided drafts expire: pending ones counted from when they were asked, ones an owner
+    started editing but never finished from the Edit tap (else they'd block every other draft)."""
     limit = deps.settings.outreach_draft_expiry_business_days
     async with deps.sessionmaker() as session:
-        pending = list(
+        open_approvals = list(
             (
                 await session.execute(
-                    select(Approval).where(Approval.item_type == ITEM_TYPE, Approval.status == "pending")
+                    select(Approval).where(
+                        Approval.item_type == ITEM_TYPE, Approval.status.in_(("pending", "editing"))
+                    )
                 )
             ).scalars()
         )
-    for approval in pending:
-        created = approval.created_at.astimezone(now_local.tzinfo).date()
-        if business_days_between(created, now_local.date()) < limit:
+    for approval in open_approvals:
+        editing = approval.status == "editing" and approval.decided_at is not None
+        since = approval.decided_at if editing else approval.created_at
+        if business_days_between(since.astimezone(now_local.tzinfo).date(), now_local.date()) < limit:
             continue
         decision = {"action": "expire", "by": "system", "by_name": "system", "approval_id": approval.id}
         async with deps.sessionmaker() as session:
             won = await approvals.transition(
                 session,
                 approval.id,
-                expected_status="pending",
+                expected_status=approval.status,
                 version=approval.version,
                 new_status="rejected",
                 owner_phone="system",
@@ -164,6 +172,33 @@ async def finish_stuck(deps: Deps, graph: Any, run: RunHandle) -> None:
             run.add("draft_errors")
 
 
+async def unlink_stale(deps: Deps, run: RunHandle) -> None:
+    """Release leads linked to a company draft that ended without an email (expired, rejected,
+    blocked, failed): their company was never emailed, so they're grouped and drafted again."""
+    primary = aliased(Lead)
+    contacted = select(primary.id).where(primary.id == Lead.primary_lead_id, primary.status.in_(CONTACTED))
+    emailed = select(EmailSend.idempotency_key).where(
+        EmailSend.lead_id == Lead.primary_lead_id, EmailSend.status != "cancelled"
+    )
+    async with deps.sessionmaker() as session:
+        released = await session.execute(
+            update(Lead)
+            .where(
+                Lead.status == "qualified",
+                Lead.primary_lead_id.is_not(None),
+                ~contacted.exists(),
+                ~emailed.exists(),
+            )
+            .values(primary_lead_id=None)
+            .returning(Lead.id)
+            .execution_options(synchronize_session=False)
+        )
+        count = len(released.all())
+        await session.commit()
+    if count:
+        run.add("links_released", count)
+
+
 async def pick_groups(deps: Deps, run: RunHandle, budget: int) -> list[list[Lead]]:
     """Qualified leads with a verified contact, grouped by company, best score first."""
     async with deps.sessionmaker() as session:
@@ -183,9 +218,9 @@ async def pick_groups(deps: Deps, run: RunHandle, budget: int) -> list[list[Lead
         )
     by_company: dict[str, list[Lead]] = defaultdict(list)
     for lead in candidates:
-        if not await usable(deps, run, lead):
+        if await link_to_contacted(deps, run, lead):  # cheap DB check before any web fetch
             continue
-        if await link_to_contacted(deps, run, lead):
+        if not await usable(deps, run, lead):
             continue
         by_company[company_key(lead)].append(lead)
 

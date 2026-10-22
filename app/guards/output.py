@@ -28,15 +28,17 @@ _COST_RE = re.compile(
     r"rate|rates|discount|discounts|margin|margins|supplier|suppliers|wholesale|cheap|cheapest)\b"
 )
 _DURATION_RE = re.compile(
-    r"\b(jour|jours|semaine|semaines|heure|heures|mois|ans|annee|annees|delai|delais|"
+    r"\b(minute|minutes|jour|jours|semaine|semaines|heure|heures|mois|ans|annee|annees|delai|delais|"
     r"day|days|week|weeks|hour|hours|month|months|year|years|lead\s+time|turnaround)\b"
 )
 _MEASURE_RE = re.compile(
     r"\b(po|pouce|pouces|pied|pieds|pi2|cm|mm|m2|metre|metres|inch|inches|ft|feet|foot|sq\s*ft)\b"
     r"|\d\s*[x×]\s*\d|²|\d\s*\"|\d\s*'"
 )
+# Any http(s) URL, www. address or bare domain (label.label ending in 2+ letters: bit.ly/x,
+# promo.xyz, stores.quebec). A number like 1.5 doesn't end in letters, so it doesn't match.
 _URL_RE = re.compile(
-    r"https?://[^\s)>\]]+|\bwww\.[^\s)>\]]+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|ca|net|org|io|co|info|biz)\b"
+    r"https?://[^\s)>\]]+|\bwww\.[^\s)>\]]+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}\b(?:/[^\s)>\]]*)?"
 )
 _EMAIL_RE = re.compile(r"[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}", re.IGNORECASE)
 _PLACEHOLDER_RE = re.compile(r"\[|\]|\{|\}|<|>|\bxxx\b|lorem|ipsum|\btodo\b|\btbd\b", re.IGNORECASE)

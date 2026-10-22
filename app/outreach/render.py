@@ -92,15 +92,32 @@ def _source_domain(url: str | None) -> str:
     return host[4:] if host.startswith("www.") else host
 
 
+# The role in "why you're receiving this" comes only from this table, in the email's language.
+# Free text (a job title copied from a web page) is never put in the footer: it would be untrusted
+# and possibly in the wrong language (§2 rules 5 and 8).
+ROLE_LABELS = {
+    "developer": {"fr": "promoteur du projet", "en": "project developer"},
+    "owner": {"fr": "propriétaire de l'immeuble", "en": "building owner"},
+    "general_contractor": {"fr": "entrepreneur général", "en": "general contractor"},
+    "property_manager": {"fr": "gestionnaire immobilier", "en": "property manager"},
+    "tenant": {"fr": "occupant des locaux", "en": "occupant of the premises"},
+    "architect": {"fr": "architecte du projet", "en": "project architect"},
+    "interior_designer": {"fr": "designer d'intérieur du projet", "en": "project interior designer"},
+}
+
+
+def role_label(role: str | None, language: str) -> str | None:
+    key = (role or "").strip().lower().replace(" ", "_")
+    labels = ROLE_LABELS.get(key)
+    return labels["en" if language == "en" else "fr"] if labels else None
+
+
 _TEXT = {
     "fr": {
         "hello": "Bonjour {name},",
         "hello_anon": "Bonjour,",
         "on_behalf": "{sender}, au nom de {company}",
-        "why": (
-            "Vous recevez ce courriel parce que votre adresse est publiée sur {source} "
-            "pour votre rôle de {role}."
-        ),
+        "why": "Vous recevez ce courriel parce que votre adresse est publiée sur {source} (rôle : {role}).",
         "why_no_role": "Vous recevez ce courriel parce que votre adresse est publiée sur {source}.",
         "unsubscribe": "Pour ne plus recevoir de courriels de notre part : {url}",
     },
@@ -108,10 +125,7 @@ _TEXT = {
         "hello": "Hello {name},",
         "hello_anon": "Hello,",
         "on_behalf": "{sender}, on behalf of {company}",
-        "why": (
-            "You are receiving this email because your address is published on {source} "
-            "for your role as {role}."
-        ),
+        "why": "You are receiving this email because your address is published on {source} (role: {role}).",
         "why_no_role": "You are receiving this email because your address is published on {source}.",
         "unsubscribe": "To stop receiving emails from us: {url}",
     },
@@ -137,11 +151,8 @@ def render(
         else t["hello_anon"]
     )
     source = _source_domain(consent_source_url) or identity.website_host
-    why = (
-        t["why"].format(source=source, role=consent_role.strip())
-        if consent_role and consent_role.strip()
-        else t["why_no_role"].format(source=source)
-    )
+    label = role_label(consent_role, language)
+    why = t["why"].format(source=source, role=label) if label else t["why_no_role"].format(source=source)
     signature = "\n".join(
         [identity.sender_name, identity.company_name, f"{identity.phone} · {identity.website}"]
     )

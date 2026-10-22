@@ -13,6 +13,7 @@ from app.db.models import Approval, EmailDraft, EmailSend, InboundMessage, Lead,
 from app.db.session import make_engine, make_sessionmaker
 from app.deps import Deps
 from app.drafting import DraftEmail
+from app.graphs import outreach_email
 from app.graphs.outreach_email import ITEM_TYPE, build_outreach_graph
 from app.handlers import GraphEntry, Handler
 from app.jobs.outreach_draft import outreach_draft_job
@@ -436,3 +437,114 @@ async def test_drafts_command_when_nothing_waits(env):
     assert await present.present_next(deps) is None
     await handler.handle(msg(OWNER_1, text="drafts"))
     assert channel.sent == []  # the API's command answers "No email drafts waiting." (main.py)
+
+
+async def test_owners_see_the_whole_email_including_the_footer(env):
+    deps, handler, channel, llm, sm = env
+    research = {"answer": {"company_role": "general_contractor"}}
+    await add_lead(sm, "A1", "info@groupehd.example", 90, research_details=research)
+    await run_job(deps)
+    detail = channel.to(OWNER_1)[1]["body"]
+    assert "Carl Abi Yaghi, au nom de Solecra" in detail and "1 rue Exemple, Saint-Laurent" in detail
+    assert "(rôle : entrepreneur général)" in detail and "[unsubscribe link]" in detail
+    assert "/u/PREVIEW" not in detail
+
+
+async def test_crash_after_own_text_was_queued_finishes_without_a_new_approval(env, monkeypatch):
+    """Review of #51: the process died after the own-text edit was queued, before the step's
+    result was saved. Recovery must finish it, not re-ask an already approved draft."""
+    deps, handler, channel, llm, sm = env
+    a1 = await add_lead(sm, "A1", "info@groupehd.example", 90)
+    await add_lead(sm, "B", "renotremblay@gmail.com", 80)
+    await run_job(deps)
+    first, second = await pending(sm)
+    await handler.handle(msg(OWNER_1, button=f"edit:{first.id}:1"))
+    await handler.handle(msg(OWNER_1, button=f"edit_text:{first.id}:2"))
+    real_info = outreach_email.log.info
+
+    def die_once_after_queueing(message, *args):
+        if message.startswith("draft %s queued"):
+            monkeypatch.setattr(outreach_email.log, "info", real_info)
+            raise RuntimeError("container restarted")  # after the commit, before the step is saved
+        real_info(message, *args)
+
+    monkeypatch.setattr(outreach_email.log, "info", die_once_after_queueing)
+    with pytest.raises(RuntimeError, match="container restarted"):
+        await handler.handle(
+            msg(OWNER_1, text="Nous aimerions vous offrir une évaluation gratuite sur place.")
+        )
+
+    state = await handler.graphs[ITEM_TYPE].graph.aget_state({"configurable": {"thread_id": first.run_id}})
+    assert state.next == ("apply",)  # the step's result was never saved: it will run again
+    await handler.resume_unfinished()
+
+    async with sm() as session:
+        assert await session.scalar(select(func.count()).select_from(EmailSend)) == 1
+    assert [a.id for a in await pending(sm)] == [second.id]  # no new approval for the sent draft
+    assert (await get(sm, Lead, a1)).status == "approved"
+    assert await present.present_next(deps) == second.id
+
+
+async def test_present_skips_an_approval_whose_draft_is_no_longer_pending(env):
+    deps, handler, channel, llm, sm = env
+    await add_lead(sm, "A1", "info@groupehd.example", 90)
+    await add_lead(sm, "B", "renotremblay@gmail.com", 80)
+    await run_job(deps)
+    first, second = await pending(sm)
+    async with sm() as session:
+        await session.execute(
+            update(EmailDraft).where(EmailDraft.id == int(first.item_id)).values(status="approved")
+        )
+        await session.commit()
+    assert await present.present_next(deps) == second.id
+
+
+async def test_a_draft_left_in_editing_expires_too(env):
+    deps, handler, channel, llm, sm = env
+    a1 = await add_lead(sm, "A1", "info@groupehd.example", 90)
+    await run_job(deps, now=datetime(2026, 10, 19, 12, tzinfo=UTC))
+    [approval] = await pending(sm)
+    await handler.handle(msg(OWNER_1, button=f"edit:{approval.id}:1"))  # …and never sends text
+    async with sm() as session:
+        await session.execute(
+            update(Approval)
+            .where(Approval.id == approval.id)
+            .values(decided_at=datetime(2026, 10, 19, 14, tzinfo=UTC))
+        )
+        await session.commit()
+
+    run = await run_job(deps, now=datetime(2026, 10, 21, 12, tzinfo=UTC))
+
+    assert run.counts["drafts_expired"] == 1
+    assert (await get(sm, Approval, approval.id)).status == "rejected"
+    assert (await get(sm, Lead, a1)).status == "drafted"  # back to qualified, drafted again
+    # Alice's next message is no longer taken as the replacement email.
+    await handler.handle(msg(OWNER_1, text="help"))
+    assert "Commands:" in channel.to(OWNER_1)[-1]["body"]
+
+
+async def test_links_to_a_draft_that_ended_unsent_are_released(env):
+    """Review of #51: A3 was linked to A1's draft; A1's draft expired unsent, so A3 (and A1's
+    sibling A2) must be grouped and drafted again, not left out forever."""
+    deps, handler, channel, llm, sm = env
+    a1 = await add_lead(sm, "A1", "info@groupehd.example", 90)
+    a2 = await add_lead(sm, "A2", "ventes@groupehd.example", 70)
+    await run_job(deps, now=datetime(2026, 10, 19, 12, tzinfo=UTC))
+    a3 = await add_lead(sm, "A3", "projets@groupehd.example", 60)
+    await run_job(deps, now=datetime(2026, 10, 20, 12, tzinfo=UTC))
+    assert (await get(sm, Lead, a3)).primary_lead_id == a1  # company in progress: linked
+    [approval] = await pending(sm)
+    async with sm() as session:
+        await session.execute(
+            update(Approval)
+            .where(Approval.id == approval.id)
+            .values(created_at=datetime(2026, 10, 19, 13, tzinfo=UTC))
+        )
+        await session.commit()
+
+    run = await run_job(deps, now=datetime(2026, 10, 21, 12, tzinfo=UTC))
+
+    assert run.counts["drafts_expired"] == 1 and run.counts["links_released"] == 2
+    async with sm() as session:
+        latest = await session.scalar(select(EmailDraft).order_by(EmailDraft.id.desc()).limit(1))
+    assert latest.status == "pending" and sorted(latest.lead_ids) == sorted([a1, a2, a3])

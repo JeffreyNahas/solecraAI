@@ -17,6 +17,8 @@ from sqlalchemy import func, select
 from app.channel import ChannelError
 from app.db.models import Approval, EmailDraft, Lead, Owner
 from app.deps import Deps
+from app.graphs.outreach_email import company_role
+from app.outreach.render import Identity, render
 from app.owners import active_owners
 from app.whatsapp.buttons import ButtonId
 
@@ -75,24 +77,28 @@ async def present_next(deps: Deps, only_phone: str | None = None) -> int | None:
         )
         if editing is not None:
             return None
-        approval = await session.scalar(
-            select(Approval)
-            .where(Approval.item_type == ITEM_TYPE, Approval.status == "pending")
-            .order_by(Approval.id)
-            .limit(1)
-        )
-        if approval is None:
-            return None
-        draft = await session.get(EmailDraft, int(approval.item_id or 0))
-        if draft is None or draft.status != "pending":
-            log.error("approval %s points to draft %s which is not pending", approval.id, approval.item_id)
+        candidates = (
+            await session.execute(
+                select(Approval)
+                .where(Approval.item_type == ITEM_TYPE, Approval.status == "pending")
+                .order_by(Approval.id)
+            )
+        ).scalars()
+        approval = draft = None
+        for candidate in candidates:  # skip a stale approval rather than block every draft behind it
+            found = await session.get(EmailDraft, int(candidate.item_id or 0))
+            if found is not None and found.status == "pending":
+                approval, draft = candidate, found
+                break
+            log.error("approval %s points to draft %s which is not pending", candidate.id, candidate.item_id)
+        if approval is None or draft is None:
             return None
         leads = list((await session.execute(select(Lead).where(Lead.id.in_(draft.lead_ids)))).scalars())
         owners = await active_owners(session)
         waiting = await pending_count(deps)
 
     leads.sort(key=lambda lead: (lead.id != draft.lead_id, lead.id))
-    detail = draft_message(draft, leads, waiting)
+    detail = draft_message(draft, leads, waiting, Identity.from_settings(deps.settings))
     primary = leads[0]
     flagged = needs_owner_check(primary)
     company = (primary.business_name or "this company")[:200]  # the email itself is never cut
@@ -124,7 +130,7 @@ def needs_owner_check(lead: Lead) -> bool:
     return bool(evidence.get("needs_owner_check"))
 
 
-def draft_message(draft: EmailDraft, leads: list[Lead], waiting: int) -> str:
+def draft_message(draft: EmailDraft, leads: list[Lead], waiting: int, identity: Identity) -> str:
     """What owners read before deciding: who, why, the evidence, then the full email."""
     primary = leads[0]
     research = primary.research_details or {}
@@ -151,17 +157,18 @@ def draft_message(draft: EmailDraft, leads: list[Lead], waiting: int) -> str:
             "Check it's theirs, not a neighbouring listing:",
             f"“{evidence.get('excerpt', '')}”",
         ]
-    greeting = f"Bonjour {primary.contact_name}," if primary.contact_name else "Bonjour,"
-    if draft.language == "en":
-        greeting = f"Hello {primary.contact_name}," if primary.contact_name else "Hello,"
-    lines += [
-        "",
-        f"Subject: {draft.subject}",
-        "",
-        greeting,
-        "",
-        draft.body or "",
-        "",
-        "[+ signature, Solecra contact details and unsubscribe link added automatically]",
-    ]
+    # The whole email exactly as it will be sent (greeting, signature, CASL footer), with the
+    # recipient's own unsubscribe link shown as a placeholder.
+    email = render(
+        subject=draft.subject or "",
+        body=draft.body or "",
+        language=draft.language,
+        contact_name=primary.contact_name,
+        consent_source_url=primary.consent_source_url,
+        consent_role=company_role(primary),
+        identity=identity,
+        unsubscribe_token="PREVIEW",
+    )
+    text = email.text.replace(email.unsubscribe_url, "[unsubscribe link]")
+    lines += ["", f"Subject: {email.subject}", "", text.rstrip()]
     return "\n".join(lines)

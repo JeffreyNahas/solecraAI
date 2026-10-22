@@ -266,16 +266,19 @@ answers go back to the model as tool messages; the last turn forces `submit_answ
 
 **08:00 job** (Québec business days; `app/outreach/calendar.py`), in order:
 1. Stop if `settings.outreach_paused`; fail (owners alerted) if the company identity is incomplete.
-2. **Expire** pending drafts older than `OUTREACH_DRAFT_EXPIRY_BUSINESS_DAYS` (2): approval rejected
-   by `system` with decision `expire` (first action wins against an owner's tap), leads back to
-   `qualified`.
+2. **Expire** drafts undecided for `OUTREACH_DRAFT_EXPIRY_BUSINESS_DAYS` (2): pending ones counted
+   from when they were asked, ones an owner tapped Edit on but never finished from the Edit tap
+   (otherwise they'd block every other draft). Approval rejected by `system` with decision `expire`
+   (first action wins against an owner's tap), leads back to `qualified`.
 3. **Finish stuck runs**: drafts still `drafting`/`pending` > 10 min whose run isn't paused are
-   continued (`ainvoke(None)`) or started.
+   continued (`ainvoke(None)`) or started. Then **release stale links**: a `qualified` lead linked
+   (`primary_lead_id`) to a lead that was never emailed (its draft expired, was rejected, blocked or
+   failed) is unlinked, so the company is grouped and drafted again with all its permits.
 4. **Pick** `qualified` leads with an email and consent URL, not linked to another lead:
    suppressed → `do_not_contact`; consent older than `OUTREACH_CONSENT_MAX_AGE_DAYS` (30) re-checked
    (`verify_consent`; failed → `no_valid_contact`, network error → another day). Grouped by company
    (company email domain, or the address for free-mail). A company already emailed or in progress
-   (a lead in `drafted`…`won`, or a non-cancelled `email_sends` row) isn't emailed again: the lead
+   (a lead in `drafted`…`won`/`lost`, or a non-cancelled `email_sends` row) isn't emailed again: the lead
    gets `primary_lead_id` and is left out. Siblings in a group point to its best-scored lead.
 5. **Draft** up to the daily cap (`settings.outreach_daily_cap`, env `OUTREACH_DAILY_CAP`, minus drafts
    made today): draft row (`lead_ids` = the company's leads), leads `qualified → drafted`, run
@@ -306,9 +309,10 @@ answers go back to the model as tool messages; the last turn forces `submit_answ
 **Showing drafts** (`app/outreach/present.py`): one at a time — the oldest pending outreach approval,
 to every owner whose 24 h window is open: a text with the research evidence (company, role, address
 of every permit, why, where the email was found, the company↔project page, the `needs_owner_check`
-excerpt when flagged) and the full email as it will read (split, never cut), then Approve / Edit /
+excerpt when flagged) and the **whole email exactly as it will be sent** — greeting, signature and
+CASL footer, the unsubscribe link shown as `[unsubscribe link]` — split, never cut, then Approve / Edit /
 Reject (Approve reads "Approve (checked)" for flagged addresses). Nothing new is shown while an owner
-is editing. Called after every decision (`GraphEntry.after_decision`), on the template's
+is editing; an approval whose draft is no longer pending is skipped (logged), never blocking the rest. Called after every decision (`GraphEntry.after_decision`), on the template's
 **Show drafts** button and on the `drafts` command. Morning: `drafts_ready` template for an owner
 whose window is closed, else a text. Message keys include approval id + version: never repeated.
 
@@ -319,10 +323,10 @@ whose window is closed, else a text. Message keys include approval id + version:
 |---|---|
 | Numbers not in the facts given to the model (address, units, permit text) or `OUTREACH_ALLOWED_NUMBERS` | §2 rule 4 |
 | Price/cost words (`prix`, `coût`, `rabais`, `$`, `%`, `price`, `discount`…) | rule 3 |
-| Duration words (`heure`, `jour`, `semaine`, `délai`, `day`, `week`…) | rule 3 (labour time) |
+| Duration words (`minute`, `heure`, `jour`, `semaine`, `délai`, `day`, `week`…) | rule 3 (labour time) |
 | Measurements (`po`, `pi`, `cm`, `ft`, `36 x 48`, `²`…) | rule 3 |
 | `OUTREACH_BLOCKED_TERMS` (supplier / brand names) | rule 3 |
-| Links other than `COMPANY_WEBSITE`, any email address | rule 5 (injected links), contact block is code's |
+| Links other than `COMPANY_WEBSITE` (any URL, `www.`, or bare domain such as `bit.ly/x`, `promo.xyz`), any email address | rule 5 (injected links), contact block is code's |
 | Placeholders/markup (`[`, `{`, `<`, `xxx`, `lorem`), greeting or sign-off in the body | code adds them |
 | Not the lead's language (function-word check) | Bill 96 |
 | Subject > 90 or body < 40 / > 1,500 characters | |

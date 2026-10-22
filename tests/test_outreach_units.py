@@ -42,6 +42,10 @@ def test_a_good_french_draft_passes():
         (GOOD_BODY + " Fenêtres de 36 x 48 po.", "measurement"),
         (GOOD_BODY + " Nous installons les toiles Hunter Douglas.", "blocked name"),
         (GOOD_BODY + " Voir https://evil.example.com/promo", "link to another site"),
+        (GOOD_BODY + " Voir bit.ly/promo-stores", "link to another site"),
+        (GOOD_BODY + " Visitez promo.xyz", "link to another site"),
+        (GOOD_BODY + " Visitez stores.quebec", "link to another site"),
+        (GOOD_BODY + " Installation en quelques minutes.", "duration"),
         (GOOD_BODY + " Écrivez à jean@autre.ca", "email address"),
         (GOOD_BODY + " Rappel: [NOM DU CONTACT]", "placeholder"),
         ("Bonjour Marie,\n\n" + GOOD_BODY, "greeting"),
@@ -105,7 +109,7 @@ def test_render_adds_greeting_signature_and_casl_footer():
     )
     assert email.text.startswith("Bonjour Marie Tremblay,\n\n" + GOOD_BODY)
     assert "Carl Abi Yaghi, au nom de Solecra" in email.text
-    assert "publiée sur groupehd.example pour votre rôle de developer" in email.text
+    assert "publiée sur groupehd.example (rôle : promoteur du projet)." in email.text
     assert (
         email.unsubscribe_url == "https://bot.solecra.example/u/tok123"
         and email.unsubscribe_url in email.text
@@ -178,3 +182,29 @@ def test_quebec_holidays_2026():
     # Thursday → Monday is 2 business days; across Thanksgiving Monday it's 1.
     assert business_days_between(date(2026, 10, 22), date(2026, 10, 26)) == 2
     assert business_days_between(date(2026, 10, 9), date(2026, 10, 13)) == 1
+
+
+@pytest.mark.parametrize(
+    ("role", "language", "expected"),
+    [
+        ("general_contractor", "fr", "(rôle : entrepreneur général)."),
+        ("general contractor", "fr", "(rôle : entrepreneur général)."),
+        ("property_manager", "en", "(role: property manager)."),
+        # Free text copied from a web page never reaches the footer (§2 rules 5 and 8).
+        ("VP Development & Construction", "fr", "publiée sur groupehd.example."),
+        (None, "fr", "publiée sur groupehd.example."),
+    ],
+)
+def test_footer_role_only_from_the_fixed_list(role, language, expected):
+    email = render(
+        subject="s",
+        body="b",
+        language=language,
+        contact_name=None,
+        consent_source_url="https://groupehd.example/contact",
+        consent_role=role,
+        identity=IDENTITY,
+        unsubscribe_token="t",
+    )
+    assert expected in email.text
+    assert "VP Development" not in email.text and "general contractor" not in email.text.split("—")[0]

@@ -361,6 +361,9 @@ independent review (`/review-pr`) before Jeff merges. No size limit on PRs.
 - **A new model can change the API rules.** claude-sonnet-5.5 under zero data retention rejects
   `temperature` (HTTP 404 "No endpoints found") and reasons by default (cost ×2.7, cut-off JSON);
   live-check a model before routing a step to it (`Route.temperature=None`, `reasoning_effort`).
+- **Simulate a crash inside the step, after its side effect.** Failing the checkpointer's write didn't
+  stop LangGraph from finishing the run, so a "crash" test passed with the bug present (review of #51).
+  Make the node raise right after its commit, then check the re-run.
 - **Owners are processed in parallel.** Tests (and code) must not assume an order between messages
   from different owners.
 
