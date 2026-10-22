@@ -263,6 +263,21 @@ is rate-limiting: the job retries with backoff; the next successful run fetches 
 last success (minus 14 days), so nothing is missed. If scoring fails for every lead (e.g. bad key),
 the run is marked failed and owners are alerted.
 
+## 7c. Lead research (07:00 daily)
+
+Runs in the `scheduler` container after the permits search. Takes up to `RESEARCH_MAX_PER_DAY`
+(15) `new` leads scoring ≥ `LEAD_SCORE_THRESHOLD`, finds the company and a published email, checks
+it in code, and marks each lead `qualified`, `no_valid_contact` or `do_not_contact`. Needs
+`OPENROUTER_API_KEY` with credits and outbound internet access (company websites).
+
+```bash
+docker compose exec scheduler python -m scripts.run_job lead_research      # run it now (same daily budget)
+docker compose exec postgres psql -U solecra -c "select id, business_name, email, consent_source_url, research_details->>'result' from leads where research_details is not null order by id desc limit 20"
+docker compose exec postgres psql -U solecra -c "select counts from runs where job='lead_research' order by id desc limit 1"
+```
+Why a lead was rejected: `research_details->'consent_check'->>'reason'` (e.g. "email not published
+on the source page"). Cost per run: `counts->>'llm_cost_microusd'` (millionths of a dollar).
+
 ## 8. Job failure alerts and `[agent]` GitHub issues
 
 Every job run is recorded in the `runs` table. On failure, owners get one WhatsApp alert per failure

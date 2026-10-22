@@ -23,6 +23,7 @@ log = logging.getLogger(__name__)
 # (job name, cron expression in local time)
 SCHEDULE: list[tuple[str, str]] = [
     ("permits_ingest", "0 6 * * *"),
+    ("lead_research", "0 7 * * *"),
 ]
 
 

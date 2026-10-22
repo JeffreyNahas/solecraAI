@@ -9,6 +9,7 @@ from app.config import Settings
 if TYPE_CHECKING:
     from app.llm import LLM
     from app.tools.github_issues import GitHubIssueReporter
+    from app.tools.web import PageFetcher
 
 
 @dataclass
@@ -20,3 +21,4 @@ class Deps:
     channel: Channel
     issues: "GitHubIssueReporter | None" = None
     llm: "LLM | None" = None
+    web: "PageFetcher | None" = None

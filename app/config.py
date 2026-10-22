@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     # these override it without a code change.
     openrouter_api_key: str = ""
     llm_model_scoring: str = "anthropic/claude-haiku-4.5"
+    llm_model_research: str = "anthropic/claude-haiku-4.5"
     llm_fallback_models: str = ""  # comma-separated OpenRouter model ids, tried in order
 
     # Permits ingestion and scoring (step 9). Open decisions: keep configurable (CLAUDE.md §11).
@@ -44,6 +45,12 @@ class Settings(BaseSettings):
     permits_min_units: int = Field(default=4, ge=1)
     lead_score_threshold: int = Field(default=60, ge=0, le=100)
     scoring_max_per_run: int = Field(default=100, ge=1)
+
+    # Lead research (step 10): leads researched per daily run (≈ $0.05–0.10 each), model turns and
+    # web searches allowed per lead. Decided 2026-10-22: 15 per day.
+    research_max_per_day: int = Field(default=15, ge=1)
+    research_max_turns: int = Field(default=8, ge=2)
+    research_max_searches: int = Field(default=4, ge=0)
 
     # Run tracking: after this many failures in a row, open/update a GitHub issue.
     run_failure_issue_threshold: int = Field(default=3, ge=1)

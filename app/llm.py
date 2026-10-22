@@ -3,6 +3,8 @@
 - OpenRouter's OpenAI-compatible chat API; provider and model can change without touching callers.
 - Model per step lives in ROUTES (overridable from settings); fallbacks via OpenRouter `models`.
 - Every call asks for structured JSON matching a Pydantic model and validates it (one retry).
+- `agent()` runs a bounded tool loop (our own tools + OpenRouter web search) that must end with
+  a final answer matching a Pydantic model.
 - Zero data retention: providers that store or train on prompts are excluded.
 - Usage and cost are returned so the caller can record them on its run.
 """
@@ -39,6 +41,7 @@ def routes(settings: Settings) -> dict[str, Route]:
     """Model per step. Cheap models for bulk steps; stronger ones for client-facing drafting (later)."""
     return {
         "lead_scoring": Route(model=settings.llm_model_scoring, temperature=0.0, max_tokens=300),
+        "lead_research": Route(model=settings.llm_model_research, temperature=0.0, max_tokens=1500),
     }
 
 
@@ -58,6 +61,40 @@ class LLMError(Exception):
         super().__init__(message)
         self.tokens = tokens
         self.cost_usd = cost_usd
+
+
+@dataclass(frozen=True)
+class Tool:
+    """A tool the model may call in `agent()`. `run` gets validated arguments and returns text."""
+
+    name: str
+    description: str
+    parameters: type[BaseModel]
+    run: Callable[[Any], Awaitable[str]]
+
+
+@dataclass(frozen=True)
+class WebSearch:
+    """OpenRouter's server-side web search tool, run by OpenRouter inside a model call."""
+
+    max_searches: int = 4  # per agent run, all turns together
+    max_results: int = 5
+    engine: str = "exa"  # fixed engine: predictable price (≈ $0.007 per search)
+
+
+@dataclass
+class AgentResult[T: BaseModel]:
+    data: T
+    model: str
+    prompt_tokens: int
+    completion_tokens: int
+    cost_usd: float
+    turns: int
+    searches: int
+    steps: list[dict[str, str]]  # tool calls made, in order (name + short args), for the record
+
+
+FINAL_TOOL = "submit_answer"
 
 
 class LLM:
@@ -85,7 +122,7 @@ class LLM:
         total_in = total_out = 0
         total_cost = 0.0
         for attempt in (1, 2):
-            body = await self._post(route, messages, schema)
+            body = await self._post(route, messages, {"response_format": _response_format(schema)})
             usage = body.get("usage") or {}
             total_in += int(usage.get("prompt_tokens") or 0)
             total_out += int(usage.get("completion_tokens") or 0)
@@ -110,21 +147,119 @@ class LLM:
             return LLMResult(data, body.get("model") or route.model, total_in, total_out, total_cost)
         raise AssertionError("unreachable")
 
+    async def agent[T: BaseModel](
+        self,
+        step: str,
+        system: str,
+        user: str,
+        schema: type[T],
+        tools: list[Tool],
+        *,
+        max_turns: int,
+        web_search: WebSearch | None = None,
+    ) -> AgentResult[T]:
+        """Bounded tool loop. Each turn is one model call; the model calls our tools (run here),
+        searches the web (run by OpenRouter), and must finish by calling `submit_answer` with
+        arguments matching `schema`. The last turn forces that call. Raises LLMError (with the
+        usage already billed) if no valid answer comes back."""
+        if not self.settings.openrouter_api_key:
+            raise LLMError("OPENROUTER_API_KEY is not set")
+        route = routes(self.settings)[step]
+        by_name = {t.name: t for t in tools}
+        final = {
+            "type": "function",
+            "function": {
+                "name": FINAL_TOOL,
+                "description": "Submit the final answer. Call this exactly once, when done.",
+                "parameters": _strict_schema(schema),
+            },
+        }
+        function_tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": _strict_schema(t.parameters),
+                },
+            }
+            for t in tools
+        ]
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        total_in = total_out = searches = 0
+        total_cost = 0.0
+        steps: list[dict[str, str]] = []
+        model = route.model
+
+        for turn in range(1, max_turns + 1):
+            last_turn = turn == max_turns
+            request_tools: list[dict[str, Any]] = [*function_tools, final]
+            if web_search and searches < web_search.max_searches and not last_turn:
+                request_tools.append(_web_search_tool(web_search, web_search.max_searches - searches))
+            extra: dict[str, Any] = {"tools": request_tools}
+            if last_turn:
+                extra["tool_choice"] = {"type": "function", "function": {"name": FINAL_TOOL}}
+            try:
+                body = await self._post(route, messages, extra)
+            except LLMError as exc:
+                raise LLMError(str(exc), tokens=total_in + total_out, cost_usd=total_cost) from exc
+            usage = body.get("usage") or {}
+            total_in += int(usage.get("prompt_tokens") or 0)
+            total_out += int(usage.get("completion_tokens") or 0)
+            total_cost += float(usage.get("cost") or 0.0)
+            searches += _search_count(usage)
+            model = body.get("model") or model
+            message = (body.get("choices") or [{}])[0].get("message") or {}
+            calls = [c for c in message.get("tool_calls") or [] if c.get("type", "function") == "function"]
+            if not calls:
+                messages.append({"role": "assistant", "content": message.get("content") or ""})
+                messages.append(
+                    {"role": "user", "content": f"Continue with the tools, then call {FINAL_TOOL}."}
+                )
+                continue
+            messages.append(
+                {"role": "assistant", "content": message.get("content") or "", "tool_calls": calls}
+            )
+            for call in calls:
+                name = call.get("function", {}).get("name", "")
+                raw_args = call.get("function", {}).get("arguments") or "{}"
+                steps.append({"tool": name, "args": raw_args[:300]})
+                if name == FINAL_TOOL:
+                    try:
+                        data = schema.model_validate_json(raw_args)
+                    except ValidationError as exc:
+                        output = f"Invalid answer, fix it and call {FINAL_TOOL} again: {exc}"
+                    else:
+                        return AgentResult(
+                            data, model, total_in, total_out, total_cost, turn, searches, steps
+                        )
+                elif name in by_name:
+                    output = await _run_tool(by_name[name], raw_args)
+                else:
+                    output = f"Unknown tool {name!r}."
+                messages.append({"role": "tool", "tool_call_id": call.get("id", ""), "content": output})
+
+        raise LLMError(
+            f"{step}: no valid answer after {max_turns} turns",
+            tokens=total_in + total_out,
+            cost_usd=total_cost,
+        )
+
     async def _post(
-        self, route: Route, messages: list[dict[str, str]], schema: type[BaseModel]
+        self, route: Route, messages: list[dict[str, Any]], extra: dict[str, Any]
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "models": [route.model, *self.settings.fallback_models()],
             "messages": messages,
             "temperature": route.temperature,
             "max_tokens": route.max_tokens,
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {"name": schema.__name__, "strict": True, "schema": _strict_schema(schema)},
-            },
             # Zero data retention: never route to providers that store or train on prompts.
             "provider": {"data_collection": "deny", "zdr": True, "require_parameters": True},
             "usage": {"include": True},
+            **extra,
         }
         headers = {
             "Authorization": f"Bearer {self.settings.openrouter_api_key}",
@@ -162,6 +297,42 @@ def _rate_limit_wait(resp: httpx.Response) -> float:
     except ValueError:
         wait = 2.0
     return min(max(wait, 1.0), MAX_RATE_LIMIT_WAIT)
+
+
+async def _run_tool(tool: Tool, raw_args: str) -> str:
+    """Run one of our tools. Errors go back to the model as text; they never end the loop."""
+    try:
+        args = tool.parameters.model_validate_json(raw_args)
+    except ValidationError as exc:
+        return f"Invalid arguments for {tool.name}: {exc}"
+    try:
+        return await tool.run(args)
+    except Exception as exc:  # a tool failure is information for the model, not a crash
+        log.warning("tool %s failed: %r", tool.name, exc)
+        return f"{tool.name} failed: {type(exc).__name__}: {exc}"
+
+
+def _web_search_tool(cfg: WebSearch, remaining: int) -> dict[str, Any]:
+    return {
+        "type": "openrouter:web_search",
+        "parameters": {"engine": cfg.engine, "max_results": cfg.max_results, "max_uses": remaining},
+    }
+
+
+def _search_count(usage: dict[str, Any]) -> int:
+    """Web searches billed in one call (OpenRouter reports them under server_tool_use)."""
+    server = usage.get("server_tool_use") or {}
+    try:
+        return int(server.get("web_search_requests") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _response_format(schema: type[BaseModel]) -> dict[str, Any]:
+    return {
+        "type": "json_schema",
+        "json_schema": {"name": schema.__name__, "strict": True, "schema": _strict_schema(schema)},
+    }
 
 
 def _strict_schema(schema: type[BaseModel]) -> dict[str, Any]:

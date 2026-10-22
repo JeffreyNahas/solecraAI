@@ -29,10 +29,17 @@ async def permits_ingest(deps: Deps, run: RunHandle) -> None:
     await permits_ingest_job(deps, run)
 
 
+async def lead_research(deps: Deps, run: RunHandle) -> None:
+    from app.jobs.lead_research import lead_research_job
+
+    await lead_research_job(deps, run)
+
+
 JOBS: dict[str, Job] = {
     "selftest_ok": selftest_ok,
     "selftest_fail": selftest_fail,
     "permits_ingest": permits_ingest,
+    "lead_research": lead_research,
 }
 
 

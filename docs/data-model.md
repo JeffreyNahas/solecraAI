@@ -74,8 +74,9 @@ Written for: owner sync, ignored non-owners, demo start, approval requested/deci
 | `score` | Fit score 0–100 from the scoring step (`app/scoring.py`); below `LEAD_SCORE_THRESHOLD` → `disqualified` |
 | `status` | See flow below |
 | `language` | `fr` (default) or `en` — Bill 96, French first |
-| `consent_source_url`, `consent_captured_at`, `consent_role`, `relevance_note` | CASL consent evidence (step 10) |
+| `consent_source_url`, `consent_captured_at`, `consent_role`, `relevance_note` | CASL consent evidence, set by the research step only when the consent check passes (`app/guards/consent.py`) |
 | `score_reason` | One line from the scoring step (why this score) |
+| `research_details` | Research step record (`app/jobs/lead_research.py`): `researched_at`, `attempts`, model, turns, searches, cost, tool calls, answer (no email/phone/name), `consent_check` with evidence (URL, fetch time, page hash, excerpt), `same_company_lead_ids`, `result` |
 | `source_details` | Public facts from the source record (permit work/building type, units, issue date, description). **No address/coordinates/personal data** — those stay in their own columns |
 | `owner_assigned` | Owner phone, optional (leads are shared) |
 | `email_domain`, `phone_normalized`, `address_normalized` | Dedupe keys, computed in `app/leads.py`, indexed |
