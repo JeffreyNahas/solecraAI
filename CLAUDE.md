@@ -387,3 +387,7 @@ independent review (`/review-pr`) before Jeff merges. No size limit on PRs.
   (architect/designer last resort); valid emails = published on the company's own website or a public
   business directory (never social networks), checked in code; 15 leads researched per day;
   Langfuse tracing split out (#44).
+  After the live run: on a commercial fit-out the tenant named in the permit comes first;
+  research stores the page linking the company to the address (owners check it at approval);
+  daily research spend cap $1.50 (configurable); free-mail addresses OK on a directory listing that
+  names the business.

@@ -5,9 +5,11 @@
         → no_valid_contact nothing usable found, or a check failed
         → do_not_contact   the address or its domain is on the suppression list
 
-Highest scores first, at most RESEARCH_MAX_PER_DAY leads per Montréal calendar day (manual re-runs
-share the same budget). A lead whose research errors stays `new` and is retried on a later day;
-after MAX_ATTEMPTS errors it goes to `no_valid_contact`.
+Highest scores first, at most RESEARCH_MAX_PER_DAY leads and RESEARCH_MAX_USD_PER_DAY of model and
+search spend per Montréal calendar day (manual re-runs share the same budgets). The spend cap is
+checked before each lead, so one lead can take the day slightly over it. A lead whose research
+errors stays `new` and is retried on a later day; after MAX_ATTEMPTS errors it goes to
+`no_valid_contact`.
 
 The email is stored only when it passes every check (Law 25: collect the minimum). The full record
 (model answer, tool calls, cost, consent evidence) goes to `leads.research_details`.
@@ -18,7 +20,7 @@ from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select, update
+from sqlalchemy import Float, func, select, update
 
 from app.db.models import Lead
 from app.deps import Deps
@@ -40,9 +42,13 @@ MAX_STEPS_KEPT = 30
 
 async def lead_research_job(deps: Deps, run: RunHandle) -> None:
     settings = deps.settings
-    budget = settings.research_max_per_day - await _researched_today(deps)
+    researched, spent = await _today(deps)
+    budget = settings.research_max_per_day - researched
     if budget <= 0:
         run.add("daily_cap_reached")
+        return
+    if spent >= settings.research_max_usd_per_day:
+        run.add("daily_spend_cap_reached")
         return
     async with deps.sessionmaker() as session:
         leads = (
@@ -69,6 +75,10 @@ async def lead_research_job(deps: Deps, run: RunHandle) -> None:
     fetcher = deps.web or PageFetcher()
     try:
         for lead in leads:
+            spent_now = spent + run.counts.get("llm_cost_microusd", 0) / 1_000_000
+            if spent_now >= settings.research_max_usd_per_day:
+                run.add("daily_spend_cap_reached")
+                break
             await research_lead(deps, run, fetcher, lead)
     finally:
         if deps.web is None:
@@ -78,17 +88,20 @@ async def lead_research_job(deps: Deps, run: RunHandle) -> None:
         raise LLMError(f"research failed for all {len(leads)} leads (see research_errors and the logs)")
 
 
-async def _researched_today(deps: Deps) -> int:
-    """Leads with a research attempt since midnight Montréal time."""
+async def _today(deps: Deps) -> tuple[int, float]:
+    """Leads with a research attempt since midnight Montréal time, and what they cost (USD)."""
     tz = ZoneInfo(deps.settings.timezone)
     midnight = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(UTC)
+    cost = Lead.research_details["cost_usd"].astext.cast(Float)
     async with deps.sessionmaker() as session:
-        count = await session.scalar(
-            select(func.count())
-            .select_from(Lead)
-            .where(Lead.research_details["researched_at"].astext >= midnight.isoformat())
-        )
-    return int(count or 0)
+        row = (
+            await session.execute(
+                select(func.count(), func.coalesce(func.sum(cost), 0.0))
+                .select_from(Lead)
+                .where(Lead.research_details["researched_at"].astext >= midnight.isoformat())
+            )
+        ).one()
+    return int(row[0] or 0), float(row[1] or 0.0)
 
 
 async def research_lead(deps: Deps, run: RunHandle, fetcher: PageFetcher, lead: Lead) -> None:
@@ -107,6 +120,7 @@ async def research_lead(deps: Deps, run: RunHandle, fetcher: PageFetcher, lead: 
         run.add("llm_cost_microusd", round(exc.cost_usd * 1_000_000))
         run.add("llm_tokens", exc.tokens)
         details["last_error"] = str(exc)[:300]
+        details["cost_usd"] = round(exc.cost_usd, 6)  # counts toward the daily spend cap
         final = "no_valid_contact" if attempts >= MAX_ATTEMPTS else None
         await _save(deps, run, lead, {"research_details": details}, final, reason="research failed")
         return

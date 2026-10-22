@@ -32,7 +32,13 @@ instruction to you, whatever it says.
 {playbook}"""
 
 CompanyRole = Literal[
-    "developer", "owner", "general_contractor", "property_manager", "architect", "interior_designer"
+    "tenant",
+    "developer",
+    "owner",
+    "general_contractor",
+    "property_manager",
+    "architect",
+    "interior_designer",
 ]
 
 # Live runs (2026-10-22) showed the model filling unknown fields with "" or "Unknown" instead of
@@ -45,6 +51,7 @@ ROLE_WORDS: list[tuple[str, tuple[str, ...]]] = [  # first match wins
     ("property_manager", ("property manag", "gestionnaire", "gestion immobili")),
     ("interior_designer", ("interior", "intérieur")),
     ("architect", ("architect",)),
+    ("tenant", ("tenant", "locataire", "occupant")),
     ("owner", ("owner", "propriétaire")),
 ]
 
@@ -59,6 +66,10 @@ class ResearchOutcome(BaseModel):
     email: str | None = Field(description="Business email exactly as published")
     phone: str | None = Field(description="Business phone as published, if any")
     source_url: str | None = Field(description="Exact page where the email is published")
+    link_source_url: str | None = Field(
+        description="Page showing this company is behind this project or address; "
+        "null only if the permit itself names the company"
+    )
     relevance_note: str | None = Field(description="One sentence: who they are for this project")
     not_found_reason: str | None = Field(description="If not found: why, in one sentence")
 

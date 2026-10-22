@@ -153,11 +153,16 @@ new, score ≥ threshold ─► agent loop (search + fetch_page) ─► answer �
                                                                    └─► no_valid_contact | do_not_contact
 ```
 1. **Pick** permit leads still `new` with `score ≥ LEAD_SCORE_THRESHOLD`, highest score first,
-   at most `RESEARCH_MAX_PER_DAY` (15, decided 2026-10-22) per Montréal calendar day. Manual re-runs
-   share the budget (counted from `research_details.researched_at`).
+   at most `RESEARCH_MAX_PER_DAY` (15, decided 2026-10-22) per Montréal calendar day, and stop once
+   the day's spend reaches `RESEARCH_MAX_USD_PER_DAY` ($1.50; checked before each lead, failed
+   attempts included). Manual re-runs share both budgets (from `research_details.researched_at`
+   and `cost_usd`).
 2. **Research** (`app/research.py`): `LLM.agent` with the playbook `app/skills/lead_research.md`
-   (who: developer/owner → general contractor → property manager → architect/designer as last resort;
-   valid sources: company's own website or a public business directory, never social networks).
+   (who: on a commercial fit-out the business named in the permit as moving in / operating (`tenant`) first, then
+   developer/owner → general contractor → property manager → architect/designer as last resort;
+   valid sources: company's own website or a public business directory, never social networks;
+   free-mail addresses allowed there). The answer includes `link_source_url`: the page tying the
+   company to the address, for owners to check at approval (null when the permit names the company).
    Tools: OpenRouter web search (Exa, ≤ `RESEARCH_MAX_SEARCHES`) and `fetch_page`
    (`app/tools/web.py`); ≤ `RESEARCH_MAX_TURNS` model turns; must end with a `ResearchOutcome`.
    The permit address is sent (needed to search); page text is wrapped in `<page>` blocks,
@@ -182,7 +187,8 @@ new, score ≥ threshold ─► agent loop (search + fetch_page) ─► answer �
    and owners are alerted.
 
 Run counts: `researched`, `qualified`, `not_found`, `consent_failed`, `suppressed`,
-`research_errors`, `research_conflicts`, `daily_cap_reached`, `web_searches`, `llm_tokens`,
+`research_errors`, `research_conflicts`, `daily_cap_reached`, `daily_spend_cap_reached`,
+`web_searches`, `llm_tokens`,
 `llm_cost_microusd`.
 
 ### Page fetcher (`app/tools/web.py`)

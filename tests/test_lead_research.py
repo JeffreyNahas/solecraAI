@@ -34,6 +34,7 @@ def outcome(**kw) -> ResearchOutcome:
         email="info@habitatnord.ca",
         phone="514 555-0100",
         source_url=CONTACT,
+        link_source_url=f"{SITE}/projets",
         relevance_note="Developer of the 40-unit building at this address.",
         not_found_reason=None,
     )
@@ -116,6 +117,7 @@ async def test_qualified_lead_gets_contact_and_evidence(deps):
     assert details["consent_check"]["ok"] and details["consent_check"]["evidence"]["page_sha256"]
     assert details["cost_usd"] == 0.05 and details["steps"][0]["tool"] == "fetch_page"
     assert "email" not in details["answer"]  # the address lives in one place only
+    assert details["answer"]["link_source_url"] == f"{SITE}/projets"  # shown to owners at approval
     assert run.counts["llm_cost_microusd"] == 50_000 and run.counts["web_searches"] == 2
 
     async with deps.sessionmaker() as session:
@@ -191,6 +193,20 @@ async def test_threshold_order_and_daily_cap(deps):
     assert (await get(deps, ids[0])).status == "qualified"
 
 
+async def test_daily_spend_cap(deps):
+    """Checked before each lead: spend so far today (this run + earlier runs) must be under the cap."""
+    ids = [await add_lead(deps, f"P{i}", score) for i, score in enumerate([90, 80, 70], start=1)]
+    deps.settings.research_max_usd_per_day = 0.08  # each scripted lead costs 0.05
+    agent = ScriptedAgent([outcome(found=False, email=None, source_url=None)] * 3)
+    deps.llm = agent
+    run = await run_job(deps)
+    assert [(await get(deps, i)).status for i in ids] == ["no_valid_contact", "no_valid_contact", "new"]
+    assert run.counts["daily_spend_cap_reached"] == 1 and len(agent.outcomes) == 1
+
+    run = await run_job(deps)  # same day: 0.10 already spent
+    assert run.counts == {"daily_spend_cap_reached": 1} and len(agent.outcomes) == 1
+
+
 async def test_errors_retry_then_give_up_and_all_failed_raises(deps):
     lead_id = await add_lead(deps, "P1", 90)
     for attempt in (1, 2, 3):
@@ -201,6 +217,7 @@ async def test_errors_retry_then_give_up_and_all_failed_raises(deps):
         assert (
             lead.research_details["attempts"] == attempt
             and "model down" in lead.research_details["last_error"]
+            and lead.research_details["cost_usd"] == 0.01  # billed even though it failed
         )
         assert lead.status == ("no_valid_contact" if attempt == 3 else "new")
         async with deps.sessionmaker() as session:  # move to "yesterday" so the daily cap allows a retry
@@ -288,6 +305,8 @@ def test_outcome_cleans_placeholders_and_loose_roles():
         ("Architecte", "architect"),
         ("Propriétaire", "owner"),
         ("property_manager", "property_manager"),
+        ("Tenant (locataire)", "tenant"),
+        ("Locataire", "tenant"),
         ("something else", None),
     ],
 )
