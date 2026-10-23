@@ -26,7 +26,6 @@ log = logging.getLogger(__name__)
 
 ITEM_TYPE = "outreach_email"
 TEMPLATE = "drafts_ready"
-TEMPLATE_LANGUAGE = "en_US"
 SHOW_DRAFTS = "show_drafts"  # quick-reply payload of the template button
 WINDOW = timedelta(hours=23)  # Meta's window is 24 h; keep a margin
 
@@ -61,7 +60,12 @@ async def morning(deps: Deps, today: str) -> int:
                 await deps.channel.send_text(owner.phone, text, key)
             else:
                 await deps.channel.send_template(
-                    owner.phone, TEMPLATE, TEMPLATE_LANGUAGE, [str(count)], key, button_payloads=[SHOW_DRAFTS]
+                    owner.phone,
+                    TEMPLATE,
+                    deps.settings.whatsapp_template_language,
+                    [str(count)],
+                    key,
+                    button_payloads=[SHOW_DRAFTS],
                 )
         except ChannelError:
             log.exception("could not send the morning message to %s", owner.phone)

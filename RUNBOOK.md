@@ -313,6 +313,46 @@ Un-suppress a tester (the code never removes entries): `delete from suppression 
 Pause all outreach: `insert into settings(key, value, updated_by) values ('outreach_paused', 'true', 'jeff') on conflict (key) do update set value='true';`
 Why a draft was blocked: `select guard from email_drafts where status='blocked'`.
 
+## 7e. Sending approved emails from Gmail (test addresses only)
+
+An approved email waits in `email_sends`; the `email_send` job (every 5 min, weekdays 09:00–16:00) sends
+**one** email per run, 15–35 min apart, up to the daily cap. While `EMAIL_MODE=test` nothing can reach
+anyone except `EMAIL_TEST_RECIPIENTS`.
+
+**One-time Google setup (Jeff, ~15 min)**
+1. console.cloud.google.com → create a project "Solecra outreach" → *APIs & Services* → *Library* → enable **Gmail API**.
+2. *OAuth consent screen* (External). Add your test Gmail address under *Test users*. Add the scope
+   `.../auth/gmail.send` only. A project left in "Testing" expires the token after 7 days: for the real
+   account use "In production" (click *Publish app*; no verification is needed while you are the only user of a
+   send-only scope).
+3. *Credentials* → *Create credentials* → *OAuth client ID* → **Desktop app** → download the JSON. Keep it out of the repo.
+4. On your computer: `uv run python -m scripts.gmail_auth --client-file ~/Downloads/client_secret_….json`, sign in with the
+   sending account, and paste the 4 printed lines into **`.env.gmail`** (next to `.env`; git-ignored). Set
+   `GMAIL_SENDER` to that address. Restart the scheduler: `docker compose up -d scheduler`.
+
+**Try it end to end** (test address only)
+```bash
+# .env: EMAIL_MODE=test, EMAIL_TEST_RECIPIENTS=you+test1@gmail.com, EMAIL_TEST_IGNORES_SCHEDULE=true
+docker compose exec scheduler python -m scripts.seed_test_lead --email you+test1@gmail.com
+docker compose exec scheduler python -m scripts.run_job outreach_draft   # draft arrives on WhatsApp: Approve
+docker compose exec scheduler python -m scripts.run_job email_send       # the email lands in the test inbox
+docker compose exec postgres psql -U solecra -c "select idempotency_key, status, attempts, error from email_sends order by created_at desc limit 5"
+```
+Click the unsubscribe link in the email, then seed a second lead with the same address: it must be
+suppressed and never sent. Use a new `+alias` for each trial (a company already emailed isn't emailed again).
+Remove `EMAIL_TEST_IGNORES_SCHEDULE` afterwards.
+
+**When it goes wrong** (the owners get the usual "didn't work" WhatsApp alert; after 3 in a row a GitHub issue)
+- *Gmail needs to be reconnected*: the sign-in expired or was revoked → run `scripts/gmail_auth.py` again, update `.env.gmail`, restart the scheduler. Nothing was lost; the email stays queued.
+- *May or may not have been sent* (`status='unknown'`): open the sending mailbox's **Sent** folder. If it is there:
+  `update email_sends set status='sent' where idempotency_key='…';` (and move the lead to `sent` by hand). If not:
+  `update email_sends set status='queued', attempts=0 where idempotency_key='…';`. Never re-queue before looking.
+- *held*: the recipient isn't in `EMAIL_TEST_RECIPIENTS` (test mode). *failed*: read the `error` column.
+- Stop everything now: the `outreach_paused` query in §7d.
+
+**Going live** is blocked until: step 7 (permanent `PUBLIC_BASE_URL`), step 15 (compliance review), a recorded
+sign-off (`settings.outreach_live`, written by a go-live script from #13), then `EMAIL_MODE=live`.
+
 ## 8. Job failure alerts and `[agent]` GitHub issues
 
 Every job run is recorded in the `runs` table. On failure, owners get one WhatsApp alert per failure

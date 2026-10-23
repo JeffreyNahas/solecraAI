@@ -1,6 +1,7 @@
 .git
 .venv
 .env
+.env.gmail
 **/__pycache__
 .pytest_cache
 .ruff_cache

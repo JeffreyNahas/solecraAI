@@ -39,7 +39,10 @@ services:
     build: .
     restart: unless-stopped
     command: ["python", "-m", "app.scheduler"]
-    env_file: .env
+    env_file:
+      - .env
+      - path: .env.gmail # Gmail credentials: only this container can send email
+        required: false
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-solecra}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-solecra}
     depends_on:

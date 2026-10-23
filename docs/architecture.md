@@ -101,7 +101,7 @@ Everything from the FastAPI route onward is identical.
 | `app/drafting.py` | Outreach drafting step (model + guard + retry), owner-text parsing |
 | `app/unsubscribe.py` | Opt-out of outreach emails: `apply_unsubscribe` (one transaction), the page HTML |
 | `app/outreach/` | `render.py` (final email + CASL footer), `present.py` (drafts on WhatsApp), `calendar.py` (Québec business days) |
-| `app/tools/` | Shared external APIs used across features (GitHub issues, `web.py` page fetcher; later Gmail, Calendar…). A source used by one feature lives with it (e.g. `app/permits/montreal.py`: client + mapping) |
+| `app/tools/` | Shared external APIs used across features (GitHub issues, `web.py` page fetcher, `gmail.py` the only code that sends email; later Calendar…). A source used by one feature lives with it (e.g. `app/permits/montreal.py`: client + mapping) |
 | `app/redact.py` | Strip emails/phones from outgoing technical text |
 | `app/llm.py` | The only way to call an LLM (OpenRouter) |
 | `app/scoring.py` | Lead scoring step (cheap model + rubric) |
