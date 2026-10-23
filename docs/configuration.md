@@ -12,6 +12,7 @@ All settings come from environment variables (`.env`, loaded by `app/config.py`)
 | `WHATSAPP_APP_SECRET` | — | Signature check on every webhook POST |
 | `WHATSAPP_ACCESS_TOKEN` | — | Sending messages (temporary token: ~24 h; system user token: long-lived) |
 | `WHATSAPP_PHONE_NUMBER_ID` | — | Sending endpoint |
+| `WHATSAPP_TEMPLATE_LANGUAGE` | `en_US` | Language code of the approved templates, as Meta lists it: "English" is `en`, "English (US)" is `en_US` |
 | `WHATSAPP_API_VERSION` | `v23.0` | Graph API version (match the app's, currently `v26.0`) |
 | `WHATSAPP_DRY_RUN` | `false` | Log instead of send |
 | `OWNER_PHONES` | — | Allowlist `phone:Name,phone:Name`, country code, digits (formatting stripped) |

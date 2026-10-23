@@ -51,7 +51,7 @@ the AI can revise `edit_text` ("My own text") / `edit_ai` ("Tell AI changes"). E
 ## Templates
 | Name | Language | Body | Button (payload) |
 |---|---|---|---|
-| `drafts_ready` | `en_US` | `Good morning! {{1}} email drafts are ready for your review.` | Quick reply "Show drafts" (`show_drafts`) |
+| `drafts_ready` | `WHATSAPP_TEMPLATE_LANGUAGE` (default `en_US`; Meta's plain "English" is `en`) | `Good morning! {{1}} email drafts are ready for your review.` | Quick reply "Show drafts" (`show_drafts`) |
 
 Created in WhatsApp Manager (Utility category); approved by Meta before use. Sent by
 `app/outreach/present.morning` to an owner whose 24 h window is closed; the button's payload

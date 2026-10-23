@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     whatsapp_access_token: str = ""
     whatsapp_phone_number_id: str = ""
     whatsapp_api_version: str = "v23.0"
+    # Language code of the approved templates, exactly as Meta lists it: "English" is `en`,
+    # "English (US)" is `en_US`, "English (UK)" is `en_GB`, "French" is `fr`.
+    whatsapp_template_language: str = "en_US"
     # When true, outbound WhatsApp messages are logged instead of sent.
     whatsapp_dry_run: bool = False
 
